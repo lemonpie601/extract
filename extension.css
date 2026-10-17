@@ -362,7 +362,7 @@
    background/color visuals since those are set inline per-swatch. */
 .mqc-preset-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.4rem;
 }
 
@@ -388,7 +388,7 @@
 /* 카드 디자인 picker: a tiny thumbnail per style + its label. */
 .mqc-style-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 0.4rem;
 }
 
@@ -453,6 +453,110 @@
   left: 0.15rem;
   color: color-mix(in srgb, var(--primary) 60%, transparent);
   font: 700 1.3rem/1 Georgia, serif;
+}
+
+.mqc-card-thumb-note {
+  background: repeating-linear-gradient(
+      to bottom,
+      transparent 0 5px,
+      color-mix(in srgb, #3c5a8c 25%, transparent) 5px 6px
+    ),
+    var(--background);
+  border-left: 3px solid color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.mqc-card-thumb-frame {
+  box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--primary) 30%, var(--background)),
+    0 0 0 1px color-mix(in srgb, var(--foreground) 15%, transparent);
+}
+
+.mqc-card-thumb-ticket {
+  outline: 1.5px dashed var(--primary);
+  outline-offset: -4px;
+  -webkit-mask: radial-gradient(circle at 0 72%, transparent 4px, #000 4.5px) left / 51% 100% no-repeat,
+    radial-gradient(circle at 100% 72%, transparent 4px, #000 4.5px) right / 51% 100% no-repeat;
+  mask: radial-gradient(circle at 0 72%, transparent 4px, #000 4.5px) left / 51% 100% no-repeat,
+    radial-gradient(circle at 100% 72%, transparent 4px, #000 4.5px) right / 51% 100% no-repeat;
+}
+
+.mqc-card-thumb-glow {
+  background: radial-gradient(circle at 90% 5%, color-mix(in srgb, var(--primary) 45%, transparent), transparent 60%),
+    linear-gradient(135deg, var(--background), color-mix(in srgb, var(--primary) 30%, var(--background)));
+}
+
+.mqc-card-thumb-film {
+  border-top: 5px solid #16161a;
+  border-bottom: 5px solid #16161a;
+}
+
+.mqc-card-thumb-grid {
+  background: linear-gradient(color-mix(in srgb, var(--primary) 22%, transparent) 1px, transparent 1px) 0 0 / 5px 5px,
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 22%, transparent) 1px, transparent 1px) 0 0 / 5px 5px,
+    var(--background);
+}
+
+.mqc-card-thumb-tape::before,
+.mqc-card-thumb-tape::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  width: 0.9rem;
+  height: 0.3rem;
+  background: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.mqc-card-thumb-tape::before {
+  left: -0.15rem;
+  transform: rotate(-36deg);
+}
+
+.mqc-card-thumb-tape::after {
+  right: -0.15rem;
+  transform: rotate(36deg);
+}
+
+/* Dialog tabs (본문 / 디자인 / 고급) — same pill language as the segments. */
+.mqc-tabs {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 0.2rem;
+  margin: 0.7rem 1.1rem 0;
+  padding: 0.18rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+}
+
+.mqc-tab {
+  height: 2rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: 650 0.74rem/1 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mqc-tab:hover {
+  color: var(--foreground);
+}
+
+.mqc-tab[data-active="true"] {
+  background: var(--background);
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.mqc-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.mqc-tab-panel[hidden] {
+  display: none;
 }
 
 .mqc-version {
@@ -680,6 +784,7 @@
 }
 
 .mqc-status {
+  padding: 0.35rem 1.1rem 0;
   min-height: 1rem;
   color: var(--muted-foreground);
   font-size: 0.7rem;
@@ -753,6 +858,10 @@
 }
 
 @media (max-width: 420px) {
+  .mqc-style-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
   .mqc-preset-grid {
     grid-template-columns: repeat(3, 1fr);
   }

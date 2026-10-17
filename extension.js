@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.1";
+const EXTENSION_VERSION = "2.5.2";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -49,10 +49,13 @@ const EXPORT_SCALES = [1, 2, 3];
 // exposes it in the sidebar markup the old lookup relied on).
 const ALLOWED_API_PATHS = [/^\/fonts$/, /^\/chats\/[\w-]+$/];
 
-// Background is a fixed palette, picked as individually-rounded swatch buttons.
+// Background palette, picked as individually-rounded swatch buttons. "테마"
+// has no fixed hex — it's a pastel tint of the site's live theme accent (see
+// resolveThemeBackgroundHex), refreshed every time the dialog opens.
 const BACKGROUND_PRESETS = [
   { key: "white", hex: "#ffffff", label: "화이트" },
   { key: "cream", hex: "#fdf8f0", label: "크림" },
+  { key: "theme", hex: null, label: "테마" },
   { key: "charcoal", hex: "#1e1e1e", label: "차콜" },
   { key: "deepBlue", hex: "#0f1523", label: "딥 블루" },
   { key: "deepGreen", hex: "#0c1a10", label: "딥 그린" },
@@ -63,6 +66,13 @@ const CARD_STYLES = [
   { key: "classic", label: "클래식" },
   { key: "minimal", label: "미니멀" },
   { key: "quote", label: "인용" },
+  { key: "frame", label: "액자" },
+  { key: "glow", label: "그라데이션" },
+  { key: "note", label: "노트" },
+  { key: "grid", label: "모눈" },
+  { key: "tape", label: "테이프" },
+  { key: "ticket", label: "티켓" },
+  { key: "film", label: "필름" },
 ];
 const CARD_STYLE_KEYS = new Set(CARD_STYLES.map((style) => style.key));
 
@@ -217,6 +227,17 @@ function resolveThemeColorHex(varName, fallbackHex) {
 // read at all.
 const FALLBACK_ACCENT_HEX = "#8b5cf6";
 
+// A soft, light pastel tint of the site's current theme accent, used for the
+// "테마" background preset — e.g. a pink theme yields a warm light pink.
+function resolveThemeBackgroundHex(accentHex) {
+  const rgb = hexToRgb(accentHex);
+  if (!rgb) return "#f3f0ff";
+  const { h, s } = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  const pastelSaturation = Math.min(0.5, Math.max(0.16, s * 0.5));
+  const pastelRgb = hslToRgb(h, pastelSaturation, 0.94);
+  return rgbToHex(pastelRgb.r, pastelRgb.g, pastelRgb.b);
+}
+
 // The card's point color (대사/테두리 색상) defaults to Marinara's own theme
 // accent instead of a hardcoded violet, so a first-time card already matches
 // whatever theme the person is using. It's always a free color picker from
@@ -260,9 +281,13 @@ const DEFAULTS = {
   chatSideMode: "auto",
   chatRightSpeakers: [],
   cardStyle: "classic",
+  // Last-open dialog tab (see DIALOG_TABS).
+  dialogTab: "text",
 };
 
 let selectedText = "";
+// The live selection's range, captured when the button is shown.
+let selectedRange = null;
 let selectedChatTitle = "캐릭터";
 let renderSequence = 0;
 let selectionTimer = 0;
@@ -287,6 +312,10 @@ const pendingDownloadUrls = new Set();
 // to be reset explicitly between renders.
 const offscreenCanvas = document.createElement("canvas");
 const offscreenCtx = offscreenCanvas.getContext("2d");
+// See renderCard: wrapped rows reused while text/font/layout mode are the
+// same, and the key of what the preview currently shows.
+let layoutCache = { key: "", rows: [] };
+let lastPreviewKey = "";
 // Tracks which "family:size" combinations we've already confirmed are
 // loaded, so repeat renders at the same font+size skip the async
 // document.fonts.load round-trip (which is otherwise awaited on every
@@ -464,12 +493,16 @@ function nearestAncestorInfo(node, boundary, cache) {
 // Text inside display:none elements (TTS cues like "[grunts]", the hidden
 // duplicate message body) isn't part of what's on screen, so it's skipped —
 // selection.toString() skips it too.
-function isRenderedText(node) {
+function isRenderedText(node, cache) {
   const parent = node.parentElement;
   if (!parent) return false;
-  return typeof parent.checkVisibility === "function"
-    ? parent.checkVisibility()
-    : parent.getClientRects().length > 0;
+  let visible = cache?.get(parent);
+  if (visible === undefined) {
+    visible =
+      typeof parent.checkVisibility === "function" ? parent.checkVisibility() : parent.getClientRects().length > 0;
+    cache?.set(parent, visible);
+  }
+  return visible;
 }
 
 // Walks the range's text nodes in document order, clipping the first/last
@@ -483,9 +516,13 @@ function extractSelectionText(range) {
       ? range.commonAncestorContainer
       : range.commonAncestorContainer.parentElement;
   if (!boundary) return "";
+  // Sibling text nodes share a parent, so visibility is checked per parent.
+  const visibilityCache = new Map();
   const walker = document.createTreeWalker(boundary, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) =>
-      range.intersectsNode(node) && isRenderedText(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+      range.intersectsNode(node) && isRenderedText(node, visibilityCache)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT,
   });
   // See classifyAncestor's comment — scoped to this one extraction so shared
   // ancestors across the selection's text nodes are classified only once.
@@ -546,6 +583,7 @@ const previewPane = el("div", "mqc-preview-pane");
 const canvas = el("canvas", "mqc-preview");
 canvas.width = CARD_WIDTH;
 canvas.height = RATIOS.portrait.height;
+const previewCtx = canvas.getContext("2d");
 previewPane.append(canvas);
 
 const controls = el("div", "mqc-controls");
@@ -595,9 +633,6 @@ const alignmentSegments = el("div", "mqc-segments");
 });
 alignmentField.append(alignmentSegments);
 
-const ratioAlignmentPair = el("div", "mqc-compact-pair");
-ratioAlignmentPair.append(ratioField, alignmentField);
-
 // Populated from /api/fonts on modal open (see loadFonts/populateFonts) —
 // same site-wide font library 발췌 카드 uses. Empty value ("기본 (Inter)")
 // keeps the previous hardcoded-Inter behavior as the default.
@@ -615,8 +650,8 @@ EXPORT_SCALES.forEach((scale) => {
 });
 exportScaleField.append(exportScaleSegments);
 
-const fontScalePair = el("div", "mqc-compact-pair");
-fontScalePair.append(fontField, exportScaleField);
+const alignmentFontPair = el("div", "mqc-compact-pair");
+alignmentFontPair.append(alignmentField, fontField);
 
 const sizeField = makeField("글자 크기");
 const sizeSegments = el("div", "mqc-segments");
@@ -710,20 +745,37 @@ chatSideField.style.display = "none";
 const chatControlsPair = el("div", "mqc-compact-pair");
 chatControlsPair.append(chatStyleField, chatSideField);
 
-// Background: fixed preset swatches (see BACKGROUND_PRESETS). Reuses the
-// mqc-segment active-state machinery (activeSegmentValue/setActiveSegment)
-// by tagging each swatch with both mqc-segment and mqc-preset.
+// Background: preset swatches (see BACKGROUND_PRESETS), activated by their
+// stable key — the "테마" swatch's hex changes with the site theme.
 const backgroundField = makeField("배경");
 const backgroundPresetGrid = el("div", "mqc-preset-grid");
-BACKGROUND_PRESETS.forEach(({ key, hex, label }) => {
-  const button = makeSegment(hex, label, label);
-  button.classList.add("mqc-preset");
-  button.dataset.presetKey = key;
-  button.style.backgroundColor = hex;
-  button.style.color = isDarkHex(hex) ? "#f5f5f5" : "#3a3a3a";
-  backgroundPresetGrid.append(button);
-});
+const themeBackgroundButton = (() => {
+  let themeButton = null;
+  BACKGROUND_PRESETS.forEach(({ key, hex, label }) => {
+    const initialHex = hex || "#f3f0ff";
+    const button = makeSegment(initialHex, label, label);
+    button.classList.add("mqc-preset");
+    button.dataset.presetKey = key;
+    button.style.backgroundColor = initialHex;
+    button.style.color = isDarkHex(initialHex) ? "#f5f5f5" : "#3a3a3a";
+    backgroundPresetGrid.append(button);
+    if (!hex) themeButton = button;
+  });
+  return themeButton;
+})();
 backgroundField.append(backgroundPresetGrid);
+
+function refreshThemeBackgroundPreset(accentHex) {
+  const hex = resolveThemeBackgroundHex(accentHex);
+  themeBackgroundButton.dataset.value = hex;
+  themeBackgroundButton.style.backgroundColor = hex;
+}
+
+function setActiveBackgroundPreset(key) {
+  backgroundPresetGrid.querySelectorAll(".mqc-preset").forEach((button) => {
+    button.dataset.active = String(button.dataset.presetKey === key);
+  });
+}
 
 const cardStyleField = makeField("카드 디자인");
 const cardStyleGrid = el("div", "mqc-style-grid");
@@ -801,21 +853,48 @@ function insertRegexSymbol(symbol) {
   queueRender();
 }
 
+// Controls are split into tabs so each screen stays short: 본문 (the text
+// and how it reads), 디자인 (how the card looks), 고급 (export + regex).
+const DIALOG_TABS = [
+  { key: "text", label: "본문" },
+  { key: "design", label: "디자인" },
+  { key: "advanced", label: "고급" },
+];
+const tabBar = el("div", "mqc-tabs");
+tabBar.setAttribute("role", "tablist");
+const tabPanels = new Map();
+DIALOG_TABS.forEach(({ key, label }) => {
+  const tab = el("button", "mqc-tab", label);
+  tab.type = "button";
+  tab.dataset.tab = key;
+  tab.setAttribute("role", "tab");
+  tabBar.append(tab);
+  const panel = el("div", "mqc-tab-panel");
+  panel.setAttribute("role", "tabpanel");
+  tabPanels.set(key, panel);
+  form.append(panel);
+});
+const ratioFooterPair = el("div", "mqc-compact-pair");
+ratioFooterPair.append(ratioField, footerLabelField);
+tabPanels.get("text").append(textField, alignmentFontPair, styleRow, chatControlsPair);
+tabPanels.get("design").append(cardStyleField, backgroundField, ratioFooterPair);
+tabPanels.get("advanced").append(exportScaleField, regexBox);
+
+let activeTab = "text";
+function showTab(key) {
+  activeTab = tabPanels.has(key) ? key : "text";
+  tabBar.querySelectorAll(".mqc-tab").forEach((tab) => {
+    const selected = tab.dataset.tab === activeTab;
+    tab.dataset.active = String(selected);
+    tab.setAttribute("aria-selected", String(selected));
+  });
+  tabPanels.forEach((panel, key) => {
+    panel.hidden = key !== activeTab;
+  });
+  form.scrollTop = 0;
+}
+
 const status = el("div", "mqc-status", "");
-form.append(
-  textField,
-  el("div", "mqc-divider"),
-  ratioAlignmentPair,
-  fontScalePair,
-  styleRow,
-  cardStyleField,
-  backgroundField,
-  footerLabelField,
-  chatControlsPair,
-  el("div", "mqc-divider"),
-  regexBox,
-  status,
-);
 
 const actions = el("div", "mqc-actions");
 const cancelButton = el("button", "mqc-action", "취소");
@@ -823,7 +902,7 @@ cancelButton.type = "button";
 const saveButton = el("button", "mqc-action mqc-action-primary", "PNG 저장");
 saveButton.type = "button";
 actions.append(cancelButton, saveButton);
-controls.append(header, form, actions);
+controls.append(header, tabBar, form, status, actions);
 dialog.append(previewPane, controls);
 overlay.append(dialog);
 
@@ -876,7 +955,7 @@ function addRegexRule(pattern = "", replacement = "") {
   removeButton.setAttribute("aria-label", "정규식 규칙 삭제");
   row.append(patternInput, arrow, replacementInput, removeButton);
   regexList.append(row);
-  [patternInput, replacementInput].forEach((input) => input.addEventListener("input", queueRender));
+  [patternInput, replacementInput].forEach((input) => input.addEventListener("input", queueTypingRender));
   removeButton.addEventListener("click", () => {
     row.remove();
     queueRender();
@@ -990,6 +1069,7 @@ function settingsFromControls() {
     chatSideMode: chatSideIsCustom ? "custom" : "auto",
     chatRightSpeakers: [...chatRightSpeakersCustom],
     cardStyle: activeSegmentValue(cardStyleGrid, DEFAULTS.cardStyle),
+    dialogTab: activeTab,
   };
 }
 
@@ -1678,14 +1758,16 @@ function drawBubbleRow(ctx, row, x, y, maxWidth, bubbleColors, family) {
 
 // Paints the card background and the decoration for settings.cardStyle.
 // Everything is drawn inside a rounded clip so the PNG's outer corners stay
-// alpha-transparent.
+// alpha-transparent. Returns { skipDivider } for styles that draw their own
+// footer separator.
 const CARD_OUTER_RADIUS = 48;
 function drawCardDecor(ctx, settings, layout) {
-  const { width: w, height: h, sideMargin, dividerY } = layout;
+  const { width: w, height: h, sideMargin, textTop, fontSize, lineHeight, dividerY } = layout;
   const bg = settings.backgroundColor;
   const accent = settings.dialogueColor;
   const dark = isDarkHex(bg);
   const style = CARD_STYLE_KEYS.has(settings.cardStyle) ? settings.cardStyle : "classic";
+  const result = { skipDivider: false };
 
   ctx.save();
   traceRoundedRect(ctx, 0, 0, w, h, CARD_OUTER_RADIUS);
@@ -1709,10 +1791,142 @@ function drawCardDecor(ctx, settings, layout) {
     ctx.fillText("“", sideMargin - 34, 250);
     const closeWidth = ctx.measureText("”").width;
     ctx.fillText("”", w - sideMargin - closeWidth + 34, dividerY + 120);
+  } else if (style === "note") {
+    // Ruled notebook paper: lines on the text baselines, a margin rule and
+    // binder holes down the left edge.
+    const ruleColor = dark ? "rgba(255,255,255,0.1)" : "rgba(60,90,140,0.14)";
+    ctx.strokeStyle = ruleColor;
+    ctx.lineWidth = 2;
+    const firstBaseline = textTop + fontSize + fontSize * 0.32;
+    const step = layout.ruledLines ? lineHeight : Math.round(fontSize * 1.45);
+    let lineY = firstBaseline;
+    while (lineY - step > 70) lineY -= step;
+    for (; lineY < dividerY - 12; lineY += step) {
+      ctx.beginPath();
+      ctx.moveTo(48, lineY);
+      ctx.lineTo(w - 40, lineY);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = hexToRgba(accent, 0.55);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(sideMargin - 22, 0);
+    ctx.lineTo(sideMargin - 22, h);
+    ctx.stroke();
+    ctx.globalCompositeOperation = "destination-out";
+    for (let holeY = 120; holeY < h - 80; holeY += 180) {
+      ctx.beginPath();
+      ctx.arc(30, holeY, 11, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  } else if (style === "frame") {
+    // Tinted mat around an inset panel, like a framed print.
+    ctx.fillStyle = mixHexColors(bg, accent, dark ? 0.28 : 0.2);
+    ctx.fillRect(0, 0, w, h);
+    ctx.shadowColor = "rgba(0,0,0,0.18)";
+    ctx.shadowBlur = 24;
+    ctx.shadowOffsetY = 6;
+    ctx.fillStyle = bg;
+    traceRoundedRect(ctx, 38, 38, w - 76, h - 76, 18);
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    ctx.strokeStyle = hexToRgba(accent, 0.5);
+    ctx.lineWidth = 1.5;
+    traceRoundedRect(ctx, 52, 52, w - 104, h - 104, 10);
+    ctx.stroke();
+  } else if (style === "ticket") {
+    // Dashed border, and notches punched out where the stub (footer) starts.
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([14, 10]);
+    traceRoundedRect(ctx, 26, 26, w - 52, h - 52, 30);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    ctx.moveTo(56, dividerY);
+    ctx.lineTo(w - 56, dividerY);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+    ctx.globalCompositeOperation = "destination-out";
+    [0, w].forEach((x) => {
+      ctx.beginPath();
+      ctx.arc(x, dividerY, 30, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalCompositeOperation = "source-over";
+    result.skipDivider = true;
+  } else if (style === "glow") {
+    // Soft diagonal wash toward the accent plus two blurred light pools.
+    const wash = ctx.createLinearGradient(0, 0, w, h);
+    wash.addColorStop(0, bg);
+    wash.addColorStop(1, mixHexColors(bg, accent, dark ? 0.35 : 0.28));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, w, h);
+    [
+      [w * 0.88, h * 0.08, Math.max(w, h) * 0.45],
+      [w * 0.05, h * 0.92, Math.max(w, h) * 0.4],
+    ].forEach(([x, y, r]) => {
+      const pool = ctx.createRadialGradient(x, y, 0, x, y, r);
+      pool.addColorStop(0, hexToRgba(accent, dark ? 0.35 : 0.3));
+      pool.addColorStop(1, hexToRgba(accent, 0));
+      ctx.fillStyle = pool;
+      ctx.fillRect(0, 0, w, h);
+    });
+  } else if (style === "film") {
+    // Film-strip bars with sprocket holes along the top and bottom edges.
+    const barHeight = 40;
+    ctx.fillStyle = dark ? "#000000" : "#16161a";
+    ctx.fillRect(0, 0, w, barHeight);
+    ctx.fillRect(0, h - barHeight, w, barHeight);
+    ctx.fillStyle = dark ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.85)";
+    for (let x = 34; x < w - 20; x += 52) {
+      traceRoundedRect(ctx, x, 13, 22, 14, 3);
+      ctx.fill();
+      traceRoundedRect(ctx, x, h - 27, 22, 14, 3);
+      ctx.fill();
+    }
+  } else if (style === "grid") {
+    // Graph paper: a fine square grid, every 5th line slightly stronger.
+    const cell = 36;
+    ctx.lineWidth = 1;
+    for (let i = 0; i * cell <= Math.max(w, h); i++) {
+      const pos = i * cell + 0.5;
+      ctx.strokeStyle = dark
+        ? `rgba(255,255,255,${i % 5 ? 0.05 : 0.11})`
+        : hexToRgba(accent, i % 5 ? 0.1 : 0.22);
+      ctx.beginPath();
+      if (pos <= w) {
+        ctx.moveTo(pos, 0);
+        ctx.lineTo(pos, h);
+      }
+      if (pos <= h) {
+        ctx.moveTo(0, pos);
+        ctx.lineTo(w, pos);
+      }
+      ctx.stroke();
+    }
+  } else if (style === "tape") {
+    // Two strips of masking tape holding the card by its top corners.
+    const drawTape = (cx, cy, angle) => {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.fillStyle = hexToRgba(accent, dark ? 0.55 : 0.42);
+      ctx.fillRect(-120, -26, 240, 52);
+      ctx.fillStyle = dark ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.32)";
+      for (let x = -120; x < 120; x += 24) ctx.fillRect(x, -26, 9, 52);
+      ctx.restore();
+    };
+    drawTape(78, 58, -Math.PI / 5);
+    drawTape(w - 78, 58, Math.PI / 5);
   }
   // "minimal": background only.
 
   ctx.restore();
+  return result;
 }
 
 // `options.scale` (1/2/3, see EXPORT_SCALES) controls the RASTER resolution
@@ -1735,8 +1949,6 @@ async function renderCard(options = {}) {
   const isAutoRatio = ratioKey === "auto";
   const ratioWidth = CARD_WIDTH;
 
-  status.textContent = "미리보기 만드는 중…";
-
   const family = settings.font ? `"${settings.font.replaceAll('"', '\\"')}"` : "Inter";
   const requestedFontSize = FONT_SIZES[settings.fontSizeLevel - 1] || FONT_SIZES[2];
   // Keyed by family+size, not just size — now that `family` can vary per
@@ -1751,12 +1963,14 @@ async function renderCard(options = {}) {
       // Widths cached before this font finished loading were measured with
       // the fallback font.
       charWidthCache.clear();
+      layoutCache = { key: "", rows: [] };
+      lastPreviewKey = "";
     } catch {
       // Canvas will fall back to the next available font; don't cache this
       // size as "loaded" so we retry on a later render.
     }
   }
-  if (sequence !== renderSequence) return;
+  if (sequence !== renderSequence) return null;
 
   const sideMargin = 86;
   const maxWidth = ratioWidth - sideMargin * 2;
@@ -1771,16 +1985,10 @@ async function renderCard(options = {}) {
   const fontSize = requestedFontSize;
   const lineHeight = Math.round(fontSize * 1.45);
 
-  // measureText only needs a 2d context with the right font set per-run — the
-  // canvas doesn't need its final pixel size yet, so layout happens before we
-  // know (for "auto") or before we act on (for fixed ratios) the card height.
-  // Reuses the persistent offscreen canvas instead of allocating a new one
-  // per render; resizing it below clears any previous contents.
-  const nextCanvas = offscreenCanvas;
-  nextCanvas.width = ratioWidth;
-  nextCanvas.height = 1;
-  const ctx = offscreenCtx;
-  if (!ctx) return;
+  // measureText only needs a 2d context with the right font set — the
+  // offscreen context is used for measuring without ever being resized.
+  const measureCtx = offscreenCtx;
+  if (!measureCtx || !previewCtx) return canvas;
 
   // A pasted KakaoTalk-style chat log (이름 / 날짜시간 / 메시지 blocks) gets a
   // dedicated transcript or bubble layout instead of being squashed through
@@ -1801,17 +2009,34 @@ async function renderCard(options = {}) {
   // bubble sitting right at the same fixed gap that works for a thin text
   // baseline reads as visually cramped against the divider.
   const footerReserve = isBubbleMode ? 108 : 80;
-  let rightSpeakerSet = new Set();
-  let rows;
-  if (isBubbleMode) {
-    const speakerNames = uniqueSpeakerNames(chatBlocks);
-    rightSpeakerSet = resolveRightSpeakerSet(speakerNames, settings);
-    rows = layoutBubbleRows(ctx, chatBlocks, maxWidth, fontSize, family, nameFontSize, rightSpeakerSet);
-  } else if (chatBlocks) {
-    rows = layoutChatRows(ctx, chatBlocks, maxWidth, fontSize, family);
-  } else {
-    rows = layoutStyledLines(ctx, processedText, maxWidth, fontSize, family).map((line) => ({ ...line, kind: "message" }));
+  const rightSpeakerSet = isBubbleMode
+    ? resolveRightSpeakerSet(uniqueSpeakerNames(chatBlocks), settings)
+    : new Set();
+  // Line breaking depends only on the text, font and layout mode — colors,
+  // background, card design, footer and alignment don't move a single line —
+  // so the wrapped rows are reused until one of those inputs changes.
+  const layoutKey = [
+    processedText,
+    family,
+    fontSize,
+    isBubbleMode ? "bubble" : chatBlocks ? "transcript" : "prose",
+    [...rightSpeakerSet].join("\u0001"),
+  ].join("\u0000");
+  if (layoutCache.key !== layoutKey) {
+    let laidOut;
+    if (isBubbleMode) {
+      laidOut = layoutBubbleRows(measureCtx, chatBlocks, maxWidth, fontSize, family, nameFontSize, rightSpeakerSet);
+    } else if (chatBlocks) {
+      laidOut = layoutChatRows(measureCtx, chatBlocks, maxWidth, fontSize, family);
+    } else {
+      laidOut = layoutStyledLines(measureCtx, processedText, maxWidth, fontSize, family).map((line) => ({
+        ...line,
+        kind: "message",
+      }));
+    }
+    layoutCache = { key: layoutKey, rows: laidOut };
   }
+  let rows = layoutCache.rows;
 
   let ratioHeight;
   let topMargin;
@@ -1859,6 +2084,9 @@ async function renderCard(options = {}) {
       rows.pop();
     }
     if (rows.length && rows[rows.length - 1].kind === "message") {
+      // Copy before trimming — the original row belongs to the layout cache.
+      const lastRow = rows[rows.length - 1];
+      rows[rows.length - 1] = { ...lastRow, runs: lastRow.runs.slice() };
       truncateLineAtWord(rows[rows.length - 1]);
     }
     // Bubble rows are only ever included whole (the accumulation above only
@@ -1879,8 +2107,17 @@ async function renderCard(options = {}) {
   // pixels without touching a single x/y/fontSize elsewhere in this
   // function.
   const renderScale = EXPORT_SCALES.includes(options.scale) ? options.scale : 1;
-  nextCanvas.width = ratioWidth * renderScale;
-  nextCanvas.height = ratioHeight * renderScale;
+  // Nothing visible changed (e.g. the same segment clicked again) — keep
+  // the current preview instead of repainting the whole card.
+  const renderKey = `${layoutKey}\u0000${JSON.stringify(settings)}\u0000${selectedChatTitle}\u0000${ratioHeight}`;
+  if (renderScale === 1 && renderKey === lastPreviewKey) return canvas;
+  // The preview is drawn directly into the visible canvas at 1×; only an
+  // export at 2×/3× renders into the offscreen canvas (no copy step either way).
+  const target = renderScale === 1 ? canvas : offscreenCanvas;
+  const ctx = renderScale === 1 ? previewCtx : offscreenCtx;
+  target.width = ratioWidth * renderScale;
+  target.height = ratioHeight * renderScale;
+  if (renderScale === 1) lastPreviewKey = renderKey;
   // Resizing a canvas clears it and resets context state (including the
   // transform) to identity, so this is safe to set unconditionally right
   // after the resize above.
@@ -1896,7 +2133,16 @@ async function renderCard(options = {}) {
   const dividerY = labelBaseline - 46;
   // Background + the picked 카드 디자인's decoration (see drawCardDecor). The
   // outer corners stay alpha-transparent in the saved PNG.
-  drawCardDecor(ctx, settings, { width: ratioWidth, height: ratioHeight, sideMargin, dividerY });
+  const decor = drawCardDecor(ctx, settings, {
+    width: ratioWidth,
+    height: ratioHeight,
+    sideMargin,
+    textTop,
+    fontSize,
+    lineHeight,
+    dividerY,
+    ruledLines: !chatBlocks,
+  });
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.shadowColor = "transparent";
@@ -1988,15 +2234,17 @@ async function renderCard(options = {}) {
   // custom string, never more than one at once — switchable via "하단 라벨".
   // Pinned to the bottom padding line rather than glued directly under the
   // body text.
-  ctx.save();
-  ctx.strokeStyle = isDarkHex(settings.backgroundColor) ? "#ffffff" : "#000000";
-  ctx.globalAlpha = 0.22;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(sideMargin, dividerY);
-  ctx.lineTo(ratioWidth - sideMargin, dividerY);
-  ctx.stroke();
-  ctx.restore();
+  if (!decor.skipDivider) {
+    ctx.save();
+    ctx.strokeStyle = isDarkHex(settings.backgroundColor) ? "#ffffff" : "#000000";
+    ctx.globalAlpha = 0.22;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(sideMargin, dividerY);
+    ctx.lineTo(ratioWidth - sideMargin, dividerY);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   // Same font stack as the body text (family + generic sans-serif fallback)
   // so "MARINARA" and the character-name label render consistently instead
@@ -2021,14 +2269,6 @@ async function renderCard(options = {}) {
     ctx.fillText(customText || selectedChatTitle || "캐릭터", sideMargin, labelBaseline);
   }
 
-  if (sequence !== renderSequence) return;
-  // Preview canvas always stays at logical (×1) size — nextCanvas (what
-  // saveButton exports) may be larger, so this downscales it into the
-  // preview via an explicit source/dest drawImage instead of the old
-  // same-size 2-arg call.
-  canvas.width = ratioWidth;
-  canvas.height = ratioHeight;
-  canvas.getContext("2d")?.drawImage(nextCanvas, 0, 0, nextCanvas.width, nextCanvas.height, 0, 0, ratioWidth, ratioHeight);
   const chatStatusSuffix = chatBlocks ? (isBubbleMode ? " · 대화 로그 (말풍선)" : " · 대화 로그 (대화록)") : "";
   // Informational only — reflects the person's SAVED 저장 배율 preference
   // (settings.exportScale), not renderScale (which this particular pass
@@ -2041,13 +2281,20 @@ async function renderCard(options = {}) {
       : "";
   status.textContent =
     regexError || `${ratioWidth} × ${ratioHeight}px · 본문 ${fontSize}px${chatStatusSuffix}${exportSuffix}`;
+  return target;
 }
 
+// Clicks re-render right away (several changes in the same tick still
+// coalesce into one render); typing passes a short delay so a burst of
+// keystrokes renders once. A timer rather than requestAnimationFrame, which
+// stalls whenever the page is in the background.
 let renderTimer = 0;
-function queueRender() {
+function queueRender(delay = 0) {
   window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => void renderCard(), 120);
+  renderTimer = window.setTimeout(() => void renderCard(), delay);
 }
+const TYPING_RENDER_DELAY = 120;
+const queueTypingRender = () => queueRender(TYPING_RENDER_DELAY);
 
 function closeModal() {
   overlay.style.display = "none";
@@ -2055,7 +2302,10 @@ function closeModal() {
 }
 
 async function openModal() {
-  if (!selectedText || overlay.style.display === "flex") return;
+  if (!selectedRange || overlay.style.display === "flex") return;
+  selectedText = normalizeText(extractSelectionText(selectedRange));
+  if (!selectedText) return;
+  selectedChatTitle = resolveChatTitle();
   selectionButton.style.display = "none";
   textArea.value = selectedText;
   const settings = loadSettings();
@@ -2089,11 +2339,16 @@ async function openModal() {
   // (instead of relying on a value computed once at page load), so a theme
   // switch is picked up immediately without needing a reload.
   const themeAccentHex = resolveThemeColorHex("--primary", FALLBACK_ACCENT_HEX);
+  refreshThemeBackgroundPreset(themeAccentHex);
 
-  // Saved "테마"/"직접" backgrounds (removed presets) fall back to white.
-  const savedPreset = BACKGROUND_PRESETS.find((preset) => preset.hex === settings.backgroundColor);
-  setActiveSegment(backgroundPresetGrid, savedPreset ? savedPreset.hex : DEFAULTS.backgroundColor);
+  // By key, so "테마" keeps following the theme. A key from an older version
+  // that no longer exists (e.g. "직접") falls back to matching the hex.
+  const savedPreset =
+    BACKGROUND_PRESETS.find((preset) => preset.key === settings.backgroundPresetKey) ||
+    BACKGROUND_PRESETS.find((preset) => preset.hex && preset.hex === settings.backgroundColor);
+  setActiveBackgroundPreset(savedPreset ? savedPreset.key : "white");
   setActiveSegment(cardStyleGrid, CARD_STYLE_KEYS.has(settings.cardStyle) ? settings.cardStyle : DEFAULTS.cardStyle);
+  showTab(settings.dialogTab);
 
   dialogueColorIsCustom = settings.dialogueColorMode === "custom";
   const restoredDialogueColor = dialogueColorIsCustom ? settings.dialogueColor || themeAccentHex : themeAccentHex;
@@ -2174,13 +2429,13 @@ function updateSelectionButton() {
     hideSelectionButton();
     return;
   }
-  const text = normalizeText(extractSelectionText(range));
-  if (!text) {
+  if (!range.toString().trim()) {
     hideSelectionButton();
     return;
   }
-  selectedText = text;
-  selectedChatTitle = resolveChatTitle();
+  // Only the range is kept here — the (more expensive) styled text
+  // extraction runs once, when the button is actually pressed.
+  selectedRange = range.cloneRange();
   positionSelectionButton(range);
 }
 
@@ -2282,8 +2537,8 @@ marinaraCompat.on(document, "keydown", (event) => {
   if (event.key !== "Escape") return;
   if (overlay.style.display === "flex") closeModal();
 });
-marinaraCompat.on(textArea, "input", queueRender);
-marinaraCompat.on(fontSelect, "change", queueRender);
+marinaraCompat.on(textArea, "input", queueTypingRender);
+marinaraCompat.on(fontSelect, "change", () => queueRender());
 
 // Segmented-control groups (이미지 비율, 본문 정렬, 하단 라벨, 채팅 로그
 // 스타일, 저장 배율, 카드 디자인, 배경) share the same "click a segment → activate
@@ -2303,8 +2558,19 @@ function wireSegmentClicks(container) {
   chatStyleSegments,
   exportScaleSegments,
   cardStyleGrid,
-  backgroundPresetGrid,
 ].forEach(wireSegmentClicks);
+marinaraCompat.on(tabBar, "click", (event) => {
+  const tab = event.target.closest(".mqc-tab[data-tab]");
+  if (!tab) return;
+  showTab(tab.dataset.tab);
+  saveSettings(settingsFromControls());
+});
+marinaraCompat.on(backgroundPresetGrid, "click", (event) => {
+  const button = event.target.closest(".mqc-preset[data-preset-key]");
+  if (!button) return;
+  setActiveBackgroundPreset(button.dataset.presetKey);
+  queueRender();
+});
 // footerCustomLabelInput is itself one of 하단 라벨's segments — clicking it
 // already activates "custom" via wireSegmentClicks above. These cover
 // keyboard focus and typing, which need to (re)activate it too.
@@ -2314,7 +2580,7 @@ marinaraCompat.on(footerCustomLabelInput, "focus", () => {
 });
 marinaraCompat.on(footerCustomLabelInput, "input", () => {
   setActiveSegment(footerLabelSegments, "custom");
-  queueRender();
+  queueTypingRender();
 });
 
 marinaraCompat.on(sizeMinusButton, "click", () => {
@@ -2330,11 +2596,11 @@ marinaraCompat.on(dialogueColorField.input, "input", () => {
   // until the next fresh selection (see dialogueColorMode in openModal()).
   dialogueColorIsCustom = true;
   syncColorFieldDisplay(dialogueColorField);
-  queueRender();
+  queueTypingRender();
 });
 marinaraCompat.on(textColorField.input, "input", () => {
   syncColorFieldDisplay(textColorField);
-  queueRender();
+  queueTypingRender();
 });
 marinaraCompat.on(regexAddButton, "click", () => addRegexRule());
 
@@ -2342,12 +2608,13 @@ marinaraCompat.on(saveButton, "click", async () => {
   // The only place a render draws above 1× — the expensive full-resolution
   // raster work happens once, right when 저장 is clicked.
   const requestedScale = Number(activeSegmentValue(exportScaleSegments, "1")) || 1;
-  await renderCard({ scale: requestedScale });
+  const rendered = await renderCard({ scale: requestedScale });
   flushSettings();
-  // Exports from offscreenCanvas (the export-resolution render above), not
-  // the ×1 preview. toBlob() snapshots the pixels synchronously, so the
-  // next render reusing offscreenCanvas can't affect this file.
-  offscreenCanvas.toBlob((blob) => {
+  if (!rendered) return;
+  // 1× exports the preview canvas itself; 2×/3× the offscreen render.
+  // toBlob() snapshots the pixels synchronously, so a later render can't
+  // affect this file.
+  rendered.toBlob((blob) => {
     if (!blob) {
       status.textContent = "이미지를 저장하지 못했습니다.";
       return;
