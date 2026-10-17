@@ -1,0 +1,15 @@
+{
+  "kind": "marinara.personal-extension",
+  "version": 1,
+  "config": {
+    "name": "마리나라 발췌 카드 (마개조)",
+    "version": "2.5.0",
+    "description": "채팅에서 드래그한 글을 폰트·배경·카드 디자인을 골라 한 장의 PNG 이미지로 저장하고, 형광펜으로 채팅과 카드에 색을 칠합니다. (Marinara Engine v2.5.0 대응)",
+    "runtime": "client",
+    "capabilities": [
+      "full_page_access"
+    ],
+    "jsPath": "extension.js",
+    "cssPath": "extension.css"
+  }
+}

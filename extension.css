@@ -1,0 +1,1004 @@
+/* Panel visuals (rounded panel, pill buttons, primary-tinted active states,
+   thin section dividers) follow the "엘린 로그 저장" reference. The selection
+   trigger itself is back to a button that follows the text selection
+   (not a bar fixed to the bottom of the screen). The two-pane responsive
+   dialog grid (preview left, controls right) stays exactly as it was. */
+
+/* Selection bar: "발췌 이미지" + highlighter swatches. Placed beside
+   Marinara 2.5.0's own "로어북에 추가" pill (see positionSelectionBar). */
+.mqc-selection-bar {
+  position: fixed;
+  z-index: 2147483000;
+  display: none;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem;
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 999px;
+  background: var(--background);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mqc-selection-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  padding: 0 0.85rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font: 600 0.78rem/1 var(--font-user, Inter, sans-serif);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.mqc-selection-button:hover {
+  opacity: 0.85;
+}
+
+.mqc-bar-swatches {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.3rem 0 0.1rem;
+}
+
+.mqc-bar-swatches[hidden] {
+  display: none !important;
+}
+
+.mqc-bar-swatch {
+  width: 1.35rem;
+  height: 1.35rem;
+  flex-shrink: 0;
+  padding: 0;
+  border: 2px solid var(--background);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 18%, transparent);
+  cursor: pointer;
+  transition: transform 0.12s;
+}
+
+.mqc-bar-swatch:hover {
+  transform: scale(1.15);
+}
+
+.mqc-bar-swatch[data-current="true"] {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+.mqc-highlight-edit-bar {
+  padding: 0.25rem 0.3rem 0.25rem 0.5rem;
+}
+
+.mqc-bar-delete {
+  height: 1.8rem;
+  padding: 0 0.7rem;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--foreground);
+  font: 600 0.72rem/1 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+}
+
+.mqc-bar-delete:hover {
+  background: var(--destructive, #e5484d);
+  color: #fff;
+}
+
+@media (pointer: coarse) {
+  .mqc-selection-button {
+    min-height: 2.4rem;
+  }
+
+  .mqc-bar-swatch {
+    width: 1.7rem;
+    height: 1.7rem;
+  }
+}
+
+.mqc-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+.mqc-dialog {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: min(1080px, 100%);
+  height: min(880px, calc(100dvh - 2rem));
+  margin: auto;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 1.5rem;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.mqc-preview-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem;
+  background: color-mix(in srgb, var(--secondary) 58%, #111);
+}
+
+.mqc-preview {
+  display: block;
+  width: min(100%, 500px);
+  /* This used to be calc(100dvh - 3.3rem) — sized off the raw viewport
+     height instead of the space actually available inside this pane. The
+     dialog itself is capped at min(880px, calc(100dvh - 2rem)), so on any
+     viewport taller than ~940px the old max-height let a tall (long-text or
+     auto-ratio) preview grow well past the dialog's real height; centered by
+     .mqc-preview-pane's align-items, it then overflowed equally above AND
+     below the dialog and got hard-clipped by .mqc-dialog's overflow:hidden —
+     the bottom clipping is what showed up as "본문이 길면 밑부분이 잘림". Sizing
+     against 100% of this pane (a grid item stretched to a definite height by
+     .mqc-dialog) keeps the whole preview within the space that's actually
+     visible, at any viewport height. */
+  max-height: 100%;
+  border-radius: 0.85rem;
+  object-fit: contain;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.4);
+}
+
+.mqc-controls {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mqc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 1rem 1.1rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.mqc-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.mqc-close {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 0;
+  border-radius: 0.6rem;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+.mqc-close:hover {
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--foreground);
+}
+
+.mqc-form {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.85rem;
+  overflow-y: auto;
+  padding: 0.85rem 1.1rem 1.1rem;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.mqc-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mqc-label {
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--muted-foreground);
+  opacity: 0.85;
+}
+
+.mqc-textarea,
+.mqc-range {
+  width: 100%;
+}
+
+.mqc-textarea {
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--secondary) 45%, transparent);
+  color: var(--foreground);
+  font: 0.72rem/1.45 var(--font-user, Inter, sans-serif);
+  transition: border-color 0.15s;
+  min-height: 5.7rem;
+  resize: vertical;
+  padding: 0.65rem;
+  line-height: 1.5;
+}
+
+.mqc-textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+}
+
+.mqc-select {
+  width: 100%;
+  height: 2.2rem;
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 0.75rem;
+  background-color: color-mix(in srgb, var(--secondary) 45%, transparent);
+  color: var(--foreground);
+  font: 0.72rem/1.45 var(--font-user, Inter, sans-serif);
+  padding: 0 1.8rem 0 0.75rem;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 0.95rem) 50%,
+    calc(100% - 0.68rem) 50%;
+  background-repeat: no-repeat;
+  background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
+}
+
+.mqc-select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+}
+
+.mqc-compact-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+
+.mqc-segments {
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+  gap: 0.2rem;
+  padding: 0.16rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+}
+
+.mqc-segment {
+  display: grid;
+  min-width: 0;
+  height: 1.8rem;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: 600 0.68rem/1 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.mqc-segment:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--secondary) 80%, transparent);
+}
+
+.mqc-segment[data-active="true"] {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.mqc-segment[data-active="true"]:hover {
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+/* The "직접입력" 하단 라벨 choice is an <input>, not a <button> — it reuses
+   .mqc-segment's sizing/color/active-state rules above as-is EXCEPT
+   display: .mqc-segment sets `display: grid; place-items: center;` to
+   center a <button>'s text, but that combination on an <input> specifically
+   is what was actually causing the "not centered" placeholder — verified by
+   testing isolated variants side by side: text-align:center alone (or with
+   appearance/padding/width added) rendered the placeholder centered every
+   time, but the moment display:grid + place-items:center was added back,
+   Chrome's placeholder rendering snapped to the left regardless of
+   text-align. This overrides display back to block and centers manually
+   via text-align (horizontal) + line-height matched to the fixed height
+   (vertical) instead — the same net visual result as .mqc-segment's
+   grid/place-items, without whatever internal quirk breaks the placeholder
+   under grid. !important on width/box-sizing/min-width/text-align because
+   this lives in the same document as Marinara's own UI (not an isolated
+   shadow root) — a host input reset can otherwise win any one of these
+   purely on source order at equal specificity. */
+.mqc-segment-input {
+  display: block !important;
+  line-height: 1.8rem !important;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid transparent;
+  outline: none;
+  padding: 0 0.4rem;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  min-width: 0 !important;
+  text-align: center !important;
+  cursor: text;
+}
+
+.mqc-segment-input::placeholder {
+  color: currentColor;
+  opacity: 0.75;
+}
+
+.mqc-segment-input[data-active="true"] {
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.mqc-align-icon {
+  display: grid;
+  width: 1.05rem;
+  gap: 2px;
+}
+
+.mqc-align-icon i {
+  display: block;
+  height: 1px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.mqc-align-icon-left i:nth-child(even),
+.mqc-align-icon-right i:nth-child(even) {
+  width: 68%;
+}
+
+.mqc-align-icon-right i:nth-child(even) {
+  justify-self: end;
+}
+
+.mqc-align-icon-center i:nth-child(even) {
+  width: 68%;
+  justify-self: center;
+}
+
+.mqc-ratio-icon {
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.mqc-ratio-square {
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
+.mqc-ratio-portrait {
+  width: 0.68rem;
+  height: 0.86rem;
+}
+
+.mqc-ratio-story {
+  width: 0.56rem;
+  height: 0.94rem;
+}
+
+.mqc-ratio-auto {
+  width: 0.88rem;
+  height: 0.72rem;
+  border-style: dashed;
+  border-radius: 3px;
+}
+
+/* 글자 크기·글자 색상·대사/테두리 색상을 한 줄에 모아둔 3열 그리드 (두 색상
+   스포이드가 서로 붙어 있도록). */
+.mqc-style-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.6rem;
+}
+
+/* Background preset swatches: 3-column grid of individually-rounded
+   buttons, each tinted with its own preset color (set inline via JS), same
+   layout language as the reference "엘린 로그 저장" background/color preset
+   grids. Reuses .mqc-segment's data-active machinery, but overrides the
+   background/color visuals since those are set inline per-swatch. */
+.mqc-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.4rem;
+}
+
+.mqc-segment.mqc-preset {
+  position: relative;
+  height: 2.1rem;
+  border: 1px solid color-mix(in srgb, var(--border) 35%, transparent);
+  border-radius: 0.85rem;
+  font: 650 0.66rem/1 var(--font-user, Inter, sans-serif);
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.mqc-segment.mqc-preset:hover {
+  transform: translateY(-1px);
+}
+
+.mqc-segment.mqc-preset[data-active="true"] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent);
+  transform: scale(1.03);
+}
+
+/* "직접" background swatch: the native color input is stretched invisibly
+   over the swatch so a click opens the picker directly. */
+.mqc-preset-custom {
+  overflow: hidden;
+  background-image: conic-gradient(from 90deg, #ff8fab, #ffd54a, #8ee6c8, #8fc3ff, #b9a7ff, #ff8fab);
+  background-blend-mode: soft-light;
+}
+
+.mqc-preset-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* 카드 디자인 picker: a tiny thumbnail per style + its label. */
+.mqc-style-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem;
+}
+
+.mqc-segment.mqc-card-style {
+  display: flex;
+  height: auto;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.45rem 0.3rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--border) 35%, transparent);
+  border-radius: 0.85rem;
+}
+
+.mqc-segment.mqc-card-style[data-active="true"] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.mqc-card-style-label {
+  font-size: 0.64rem;
+}
+
+.mqc-card-thumb {
+  position: relative;
+  display: block;
+  width: 2.1rem;
+  height: 2.6rem;
+  overflow: hidden;
+  border-radius: 0.3rem;
+  background: var(--background);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 15%, transparent);
+}
+
+/* two "text lines" inside each thumbnail */
+.mqc-card-thumb i {
+  position: absolute;
+  left: 22%;
+  right: 22%;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--foreground) 35%, transparent);
+}
+
+.mqc-card-thumb i:first-child {
+  top: 40%;
+}
+
+.mqc-card-thumb i:last-child {
+  top: 54%;
+  right: 38%;
+}
+
+.mqc-card-thumb-classic {
+  border-top: 3px solid var(--primary);
+  box-shadow: inset 0 0 0 2px var(--background), inset 0 0 0 3px var(--primary);
+}
+
+.mqc-card-thumb-quote::before {
+  content: "“";
+  position: absolute;
+  top: -0.15rem;
+  left: 0.15rem;
+  color: color-mix(in srgb, var(--primary) 60%, transparent);
+  font: 700 1.3rem/1 Georgia, serif;
+}
+
+.mqc-card-thumb-note {
+  background: repeating-linear-gradient(
+      to bottom,
+      transparent 0 5px,
+      color-mix(in srgb, #3c5a8c 25%, transparent) 5px 6px
+    ),
+    var(--background);
+  border-left: 3px solid color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.mqc-card-thumb-frame {
+  box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--primary) 30%, var(--background)),
+    0 0 0 1px color-mix(in srgb, var(--foreground) 15%, transparent);
+}
+
+.mqc-card-thumb-ticket {
+  outline: 1.5px dashed var(--primary);
+  outline-offset: -4px;
+  -webkit-mask: radial-gradient(circle at 0 72%, transparent 4px, #000 4.5px) left / 51% 100% no-repeat,
+    radial-gradient(circle at 100% 72%, transparent 4px, #000 4.5px) right / 51% 100% no-repeat;
+  mask: radial-gradient(circle at 0 72%, transparent 4px, #000 4.5px) left / 51% 100% no-repeat,
+    radial-gradient(circle at 100% 72%, transparent 4px, #000 4.5px) right / 51% 100% no-repeat;
+}
+
+.mqc-card-thumb-glow {
+  background: radial-gradient(circle at 90% 5%, color-mix(in srgb, var(--primary) 45%, transparent), transparent 60%),
+    linear-gradient(135deg, var(--background), color-mix(in srgb, var(--primary) 30%, var(--background)));
+}
+
+.mqc-card-thumb-film {
+  border-top: 5px solid #16161a;
+  border-bottom: 5px solid #16161a;
+}
+
+/* 형광펜 section inside the dialog */
+.mqc-highlight-palette {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.mqc-highlight-palette .mqc-bar-swatch {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.mqc-highlight-add {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1.5px dashed color-mix(in srgb, var(--foreground) 40%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mqc-highlight-add::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+
+.mqc-highlight-add::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+  opacity: 0.55;
+}
+
+.mqc-hint {
+  color: var(--muted-foreground);
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.mqc-version {
+  margin-left: 0.45rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+  font-size: 0.62rem;
+  font-weight: 650;
+  vertical-align: middle;
+}
+
+.mqc-color-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* 말풍선 방향 pills: one per detected speaker, toggled independently (not a
+   single-select segmented group like .mqc-segments), so they get their own
+   small pill style rather than reusing .mqc-segment's data-active grid. */
+.mqc-chat-side-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.mqc-chat-side-pill {
+  height: 1.8rem;
+  padding: 0 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+  color: var(--muted-foreground);
+  font: 600 0.68rem/1 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.mqc-chat-side-pill:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--secondary) 80%, transparent);
+}
+
+.mqc-chat-side-pill[data-active="true"] {
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.mqc-color {
+  width: 2.75rem;
+  height: 2.2rem;
+  padding: 0.15rem;
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--secondary) 45%, transparent);
+  cursor: pointer;
+}
+
+.mqc-color-value {
+  color: var(--muted-foreground);
+  font: 0.72rem/1 ui-monospace, monospace;
+}
+
+.mqc-divider {
+  height: 1px;
+  margin: 0.1rem 0;
+  background: color-mix(in srgb, var(--border) 22%, transparent);
+  flex-shrink: 0;
+}
+
+.mqc-regex-box {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--secondary) 30%, transparent);
+}
+
+.mqc-regex-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+}
+
+.mqc-regex-add {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  background: color-mix(in srgb, var(--secondary) 60%, transparent);
+  color: var(--muted-foreground);
+  font: 650 0.7rem/1 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+.mqc-regex-add:hover {
+  background: color-mix(in srgb, var(--secondary) 90%, transparent);
+  color: var(--foreground);
+}
+
+/* "＋ 추가" plus the quick-insert symbol buttons, sharing the regex header's
+   single line alongside the "정규식" label — clicking a symbol drops it into
+   whichever 치환 input was last focused. Fixed at 5 symbols, so this never
+   needs to wrap onto a second line. */
+.mqc-regex-symbols {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  gap: 0.3rem;
+}
+
+.mqc-regex-symbol {
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+  color: var(--foreground);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.mqc-regex-symbol:hover {
+  background: color-mix(in srgb, var(--secondary) 85%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  transform: translateY(-1px);
+}
+
+.mqc-regex-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mqc-regex-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1rem minmax(0, 1fr) 1.7rem;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mqc-regex-arrow {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.mqc-regex-remove {
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+.mqc-regex-remove:hover {
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--foreground);
+}
+
+.mqc-input {
+  min-width: 0;
+  height: 2.3rem;
+  padding: 0 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 0.65rem;
+  background: var(--background);
+  color: var(--foreground);
+  font: 0.75rem/1 inherit;
+  transition: border-color 0.15s;
+}
+
+.mqc-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+}
+
+.mqc-actions {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.85rem 1.1rem 1.1rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 25%, transparent);
+}
+
+.mqc-action {
+  min-height: 2.5rem;
+  flex: 1;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 65%, transparent);
+  color: var(--muted-foreground);
+  font: 650 0.82rem/1 inherit;
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+.mqc-action:hover {
+  background: color-mix(in srgb, var(--secondary) 95%, transparent);
+  color: var(--foreground);
+}
+
+.mqc-action-primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.mqc-action-primary:hover {
+  opacity: 0.85;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.mqc-status {
+  min-height: 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  /* .mqc-overlay (the fixed, full-screen backdrop this dialog sits in) has
+     padding: 1rem on every side — 2rem of vertical padding total (top +
+     bottom), same as the desktop rule below already accounts for
+     (height: min(880px, calc(100dvh - 2rem))). This mobile override was
+     only subtracting 1rem, so the dialog was exactly 1rem (16px) taller
+     than the space actually available inside the padded overlay — just
+     enough to force the OUTER overlay itself to scroll (on top of, and
+     separate from, .mqc-form's own intentional internal scroll), which is
+     the "the whole window is too long and gets its own scrollbar" bug.
+     Matching the desktop formula removes that forced overflow entirely. */
+  .mqc-dialog {
+    grid-template-columns: 1fr;
+    width: min(100%, 520px);
+    height: calc(100dvh - 2rem);
+  }
+
+  .mqc-preview-pane {
+    min-height: 0;
+    padding: 0.6rem;
+  }
+
+  /* Only capping height (leaving width: auto) breaks for any card WIDER than
+     tall — e.g. "자동" ratio on a short excerpt, where height can shrink to
+     480px while width stays fixed at 1080px, so an auto width computed from
+     that height alone overshoots the phone's screen width and overflows
+     horizontally. Capping both max-width and max-height (with width/height
+     left auto) makes the browser shrink the canvas to fit whichever
+     dimension is more restrictive, preserving its aspect ratio either way.
+     The cap was originally 42vh/390px (took up close to half the dialog's
+     height), got trimmed to 24vh/230px to make room for the controls and
+     the 발췌문 textarea below it, then settled here at 32vh/300px — big
+     enough to actually read the card layout at a glance, still well short
+     of dominating the screen the way the original did. */
+  .mqc-preview {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: min(32vh, 300px);
+  }
+
+  .mqc-style-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  /* A couple of small trims to the fixed chrome around the scrollable form
+     (header, footer actions) free up a bit more room on a short phone
+     screen. */
+  .mqc-header {
+    padding: 0.7rem 1rem 0.6rem;
+  }
+
+  .mqc-actions {
+    padding: 0.6rem 1rem 0.8rem;
+  }
+
+  /* 발췌문 textarea is the actual editing surface — the box the person reads
+     and edits their pasted text in — not just another settings field, so it
+     keeps a taller-than-default minimum on mobile rather than a small one.
+     Trimmed slightly from an earlier 30vh/260px — that made the box itself
+     tall enough to push the rest of the form further down than needed. */
+  .mqc-textarea {
+    min-height: min(24vh, 210px);
+  }
+}
+
+@media (max-width: 420px) {
+  .mqc-preset-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .mqc-compact-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .mqc-style-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 대사/문단 고르기 — the line/paragraph checklist built from the chat. */
+.mqc-picker-count {
+  color: var(--muted-foreground);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mqc-picker-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: min(34vh, 260px);
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--secondary) 30%, transparent);
+  overscroll-behavior: contain;
+}
+
+.mqc-picker-message {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.mqc-picker-speaker {
+  justify-self: start;
+  padding: 0.1rem 0.35rem;
+  border: none;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--primary);
+  font: 700 0.68rem/1.3 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+}
+
+.mqc-picker-speaker:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.mqc-picker-unit {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 0.55rem;
+  color: var(--foreground);
+  font: 0.72rem/1.45 var(--font-user, Inter, sans-serif);
+  cursor: pointer;
+}
+
+.mqc-picker-unit:hover {
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+}
+
+.mqc-picker-unit:has(input:checked) {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.mqc-picker-unit input {
+  flex-shrink: 0;
+  margin: 0.15rem 0 0;
+  accent-color: var(--primary);
+}
+
+.mqc-picker-text {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
