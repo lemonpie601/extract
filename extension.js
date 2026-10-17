@@ -1,10 +1,8 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.0";
+const EXTENSION_VERSION = "2.5.1";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
-// Chat highlights are stored per chat: `${HIGHLIGHT_STORAGE_PREFIX}${chatId}`.
-const HIGHLIGHT_STORAGE_PREFIX = "marinara-quote-card-highlights-v1:";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
 // Marinara 2.5.0's own selection button ("로어북에 추가"). Ours is placed
 // beside it instead of on top of it.
@@ -51,55 +49,22 @@ const EXPORT_SCALES = [1, 2, 3];
 // exposes it in the sidebar markup the old lookup relied on).
 const ALLOWED_API_PATHS = [/^\/fonts$/, /^\/chats\/[\w-]+$/];
 
-// Background palette picked as individually-rounded swatch buttons. "테마" has
-// no fixed hex — it's derived live from the site's theme accent (see
-// resolveThemeBackgroundHex). "직접" is backed by a free color picker.
+// Background is a fixed palette, picked as individually-rounded swatch buttons.
 const BACKGROUND_PRESETS = [
   { key: "white", hex: "#ffffff", label: "화이트" },
   { key: "cream", hex: "#fdf8f0", label: "크림" },
-  { key: "theme", hex: null, label: "테마" },
-  { key: "butter", hex: "#fff6d6", label: "버터" },
-  { key: "peach", hex: "#ffece3", label: "피치" },
-  { key: "rose", hex: "#fde8ee", label: "로즈" },
-  { key: "lavender", hex: "#efeaff", label: "라벤더" },
-  { key: "sky", hex: "#e6f1fb", label: "스카이" },
-  { key: "mint", hex: "#e4f5ee", label: "민트" },
-  { key: "sage", hex: "#e9eee0", label: "세이지" },
-  { key: "fog", hex: "#ececee", label: "포그" },
   { key: "charcoal", hex: "#1e1e1e", label: "차콜" },
   { key: "deepBlue", hex: "#0f1523", label: "딥 블루" },
   { key: "deepGreen", hex: "#0c1a10", label: "딥 그린" },
-  { key: "wine", hex: "#2a1219", label: "와인" },
-  { key: "plum", hex: "#1f1630", label: "플럼" },
-  { key: "black", hex: "#0a0a0b", label: "블랙" },
 ];
-const CUSTOM_BACKGROUND_KEY = "custom";
 
 // Card design variations — decoration only; text layout is shared.
 const CARD_STYLES = [
   { key: "classic", label: "클래식" },
   { key: "minimal", label: "미니멀" },
   { key: "quote", label: "인용" },
-  { key: "note", label: "노트" },
-  { key: "frame", label: "액자" },
-  { key: "ticket", label: "티켓" },
-  { key: "glow", label: "그라데이션" },
-  { key: "film", label: "필름" },
 ];
 const CARD_STYLE_KEYS = new Set(CARD_STYLES.map((style) => style.key));
-
-// Highlighter (형광펜) — shared by chat highlights and the card renderer.
-const DEFAULT_HIGHLIGHT_COLORS = ["#ffd54a", "#ff8fab", "#8ee6c8", "#b9a7ff"];
-const MAX_HIGHLIGHT_COLORS = 8;
-const HIGHLIGHT_STYLES = [
-  { key: "marker", label: "형광펜" },
-  { key: "box", label: "박스" },
-  { key: "underline", label: "밑줄" },
-];
-const HIGHLIGHT_STYLE_KEYS = new Set(HIGHLIGHT_STYLES.map((style) => style.key));
-const HIGHLIGHT_CONTEXT_LENGTH = 32;
-// "==text==" (first palette color) or "=={#rrggbb}text==" in the 발췌문.
-const HIGHLIGHT_MARKER_RE = /==(?:\{#[0-9a-f]{6}\})?/gi;
 
 function hexToRgb(hex) {
   const match = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
@@ -113,12 +78,11 @@ function rgbToHex(r, g, b) {
 }
 
 function hexToRgba(hex, alpha) {
-  const rgb = hexToRgb(hex) || { r: 255, g: 213, b: 74 };
+  const rgb = hexToRgb(hex) || { r: 139, g: 92, b: 246 };
   return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
 }
 
-// Luminance-based instead of a fixed set of "dark" preset hexes, so the free
-// "직접" background color picks the right text/divider treatment too.
+// Luminance-based "is this a dark card" check (decides text/divider colors).
 const darkHexCache = new Map();
 function isDarkHex(hex) {
   let dark = darkHexCache.get(hex);
@@ -128,10 +92,6 @@ function isDarkHex(hex) {
     darkHexCache.set(hex, dark);
   }
   return dark;
-}
-
-function normalizeHex(value, fallback) {
-  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : fallback;
 }
 
 // Blends hexA toward hexB by `ratio` (0 = pure hexA, 1 = pure hexB). Used to
@@ -257,20 +217,6 @@ function resolveThemeColorHex(varName, fallbackHex) {
 // read at all.
 const FALLBACK_ACCENT_HEX = "#8b5cf6";
 
-// A soft, light pastel tint of the site's current theme accent, used for the
-// "테마" background preset — e.g. a pink theme yields a warm light pink, a
-// green theme a low-saturation light green, instead of the old fixed 연보라.
-// Takes the already-resolved accent hex so callers that also need the raw
-// accent (e.g. for 대사/테두리 색상) don't resolve the CSS variable twice.
-function resolveThemeBackgroundHex(accentHex) {
-  const rgb = hexToRgb(accentHex);
-  if (!rgb) return "#f3f0ff";
-  const { h, s } = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  const pastelSaturation = Math.min(0.5, Math.max(0.16, s * 0.5));
-  const pastelRgb = hslToRgb(h, pastelSaturation, 0.94);
-  return rgbToHex(pastelRgb.r, pastelRgb.g, pastelRgb.b);
-}
-
 // The card's point color (대사/테두리 색상) defaults to Marinara's own theme
 // accent instead of a hardcoded violet, so a first-time card already matches
 // whatever theme the person is using. It's always a free color picker from
@@ -314,12 +260,6 @@ const DEFAULTS = {
   chatSideMode: "auto",
   chatRightSpeakers: [],
   cardStyle: "classic",
-  // Remembered separately so picking a preset and coming back to "직접"
-  // restores the last custom color.
-  customBackgroundColor: "#f4efe6",
-  highlightColors: DEFAULT_HIGHLIGHT_COLORS,
-  highlightOpacity: 0.55,
-  highlightStyle: "marker",
 };
 
 let selectedText = "";
@@ -429,30 +369,6 @@ function saveSettings(settings) {
   pendingSettings = settings;
   window.clearTimeout(saveSettingsTimer);
   saveSettingsTimer = window.setTimeout(flushSettings, 600);
-}
-
-// Highlighter preferences are needed before the dialog ever opens (chat
-// highlights + selection bar swatches), so they live in their own small
-// in-memory object that the dialog reads from and writes back to.
-const highlightPrefs = (() => {
-  const saved = loadSettings();
-  const colors = Array.isArray(saved.highlightColors)
-    ? saved.highlightColors.map((hex) => normalizeHex(hex, null)).filter(Boolean).slice(0, MAX_HIGHLIGHT_COLORS)
-    : [];
-  return {
-    colors: colors.length ? colors : [...DEFAULT_HIGHLIGHT_COLORS],
-    opacity: Math.min(1, Math.max(0.15, Number(saved.highlightOpacity) || DEFAULTS.highlightOpacity)),
-    style: HIGHLIGHT_STYLE_KEYS.has(saved.highlightStyle) ? saved.highlightStyle : DEFAULTS.highlightStyle,
-  };
-})();
-
-function persistHighlightPrefs() {
-  saveSettings({
-    ...(pendingSettings || loadSettings()),
-    highlightColors: [...highlightPrefs.colors],
-    highlightOpacity: highlightPrefs.opacity,
-    highlightStyle: highlightPrefs.style,
-  });
 }
 
 // Saved PNG filenames are "marinara-1.png", "marinara-2.png", ... instead of
@@ -602,61 +518,21 @@ function extractSelectionText(range) {
       result += "*";
       italicOpen = italic;
     }
-    result += withHighlightMarkers(node, start, end, text);
+    result += text;
   }
   if (italicOpen) result += "*";
   return result;
 }
 
-// Chat highlights (CSS Custom Highlight ranges, see the highlighter section)
-// carry over into the excerpt as "=={#hex}...==" markers, so the card draws
-// them with the same color.
-function withHighlightMarkers(node, start, end, text) {
-  if (!resolvedHighlights.length) return text;
-  const spans = [];
-  for (const { record, range } of resolvedHighlights) {
-    if (!range.intersectsNode(node)) continue;
-    const from = Math.max(start, node === range.startContainer ? range.startOffset : 0);
-    const to = Math.min(end, node === range.endContainer ? range.endOffset : node.textContent.length);
-    if (to > from) spans.push({ from, to, color: record.color });
-  }
-  if (!spans.length) return text;
-  spans.sort((a, b) => a.from - b.from);
-  let out = "";
-  let cursor = start;
-  for (const span of spans) {
-    if (span.from < cursor) continue;
-    out += node.textContent.slice(cursor, span.from);
-    out += `=={${span.color}}${node.textContent.slice(span.from, span.to)}==`;
-    cursor = span.to;
-  }
-  return out + node.textContent.slice(cursor, end);
-}
-
-// A small bar that follows the text selection: the "발췌 이미지" button plus
-// highlighter swatches. Positioned next to Marinara 2.5.0's own
-// "로어북에 추가" button instead of on top of it (see positionSelectionBar).
-const selectionBar = marinaraCompat.addElement(document.body, "div", {
-  class: "mqc-selection-bar",
-  role: "toolbar",
-  "aria-label": "발췌/형광펜",
+// A single button that follows the text selection. Positioned next to
+// Marinara 2.5.0's own "로어북에 추가" button instead of on top of it (see
+// positionSelectionButton).
+const selectionButton = marinaraCompat.addElement(document.body, "button", {
+  class: "mqc-selection-button",
+  type: "button",
+  textContent: "✦ 발췌 이미지",
+  "aria-label": "선택한 글을 이미지로 만들기",
 });
-const selectionButton = el("button", "mqc-selection-button", "✦ 발췌 이미지");
-selectionButton.type = "button";
-selectionButton.setAttribute("aria-label", "선택한 글을 이미지로 만들기");
-const selectionSwatches = el("div", "mqc-bar-swatches");
-selectionBar.append(selectionButton, selectionSwatches);
-
-// Edit bar shown when a chat highlight is clicked: recolor or remove it.
-const highlightEditBar = marinaraCompat.addElement(document.body, "div", {
-  class: "mqc-selection-bar mqc-highlight-edit-bar",
-  role: "toolbar",
-  "aria-label": "형광펜 편집",
-});
-const editSwatches = el("div", "mqc-bar-swatches");
-const editDeleteButton = el("button", "mqc-bar-delete", "지우기");
-editDeleteButton.type = "button";
-highlightEditBar.append(editSwatches, editDeleteButton);
 
 const overlay = marinaraCompat.addElement(document.body, "div", {
   class: "mqc-overlay",
@@ -687,26 +563,6 @@ const textField = makeField("발췌문");
 const textArea = el("textarea", "mqc-textarea");
 textArea.maxLength = 5000;
 textField.append(textArea);
-
-// 대사/문단 고르기: the messages around the drag selection, split into lines
-// (CONVO) or paragraphs (RP), each toggled on/off. The excerpt is built from
-// the checked units — speaker names come from the message markup itself, so
-// it works whatever the chat style looks like (name+timestamp or bubbles).
-const pickerField = el("div", "mqc-field mqc-picker");
-const pickerHeader = el("div", "mqc-regex-header");
-const pickerLabel = el("span", "mqc-label", "대사 고르기");
-const pickerTools = el("div", "mqc-regex-symbols");
-const pickerCount = el("span", "mqc-picker-count", "");
-const pickerAllButton = el("button", "mqc-regex-add", "모두");
-pickerAllButton.type = "button";
-const pickerNoneButton = el("button", "mqc-regex-add", "해제");
-pickerNoneButton.type = "button";
-pickerTools.append(pickerCount, pickerAllButton, pickerNoneButton);
-pickerHeader.append(pickerLabel, pickerTools);
-const pickerList = el("div", "mqc-picker-list");
-const pickerHint = el("div", "mqc-hint", "");
-pickerField.append(pickerHeader, pickerList, pickerHint);
-pickerField.style.display = "none";
 
 const ratioField = makeField("이미지 비율");
 const ratioSegments = el("div", "mqc-segments");
@@ -854,46 +710,20 @@ chatSideField.style.display = "none";
 const chatControlsPair = el("div", "mqc-compact-pair");
 chatControlsPair.append(chatStyleField, chatSideField);
 
-// Background: fixed preset swatches (see BACKGROUND_PRESETS) instead of a
-// free color picker. Reuses the mqc-segment active-state machinery
-// (activeSegmentValue/setActiveSegment) by tagging each swatch with both
-// mqc-segment and mqc-preset. "테마" (key "theme") has no fixed hex — it's
-// filled in and kept fresh by refreshThemeBackgroundPreset(), called every
-// time the modal opens.
+// Background: fixed preset swatches (see BACKGROUND_PRESETS). Reuses the
+// mqc-segment active-state machinery (activeSegmentValue/setActiveSegment)
+// by tagging each swatch with both mqc-segment and mqc-preset.
 const backgroundField = makeField("배경");
 const backgroundPresetGrid = el("div", "mqc-preset-grid");
-const backgroundPresetButtons = new Map();
 BACKGROUND_PRESETS.forEach(({ key, hex, label }) => {
-  const initialHex = hex || "#f3f0ff";
-  const button = makeSegment(initialHex, label, label);
+  const button = makeSegment(hex, label, label);
   button.classList.add("mqc-preset");
   button.dataset.presetKey = key;
-  button.style.backgroundColor = initialHex;
-  button.style.color = isDarkHex(initialHex) ? "#f5f5f5" : "#3a3a3a";
+  button.style.backgroundColor = hex;
+  button.style.color = isDarkHex(hex) ? "#f5f5f5" : "#3a3a3a";
   backgroundPresetGrid.append(button);
-  backgroundPresetButtons.set(key, button);
 });
-// "직접": a preset swatch whose value comes from a color input layered over
-// it — clicking the swatch opens the native picker directly.
-const customBackgroundButton = makeSegment(DEFAULTS.customBackgroundColor, "배경 색 직접 고르기", "직접");
-customBackgroundButton.classList.add("mqc-preset", "mqc-preset-custom");
-customBackgroundButton.dataset.presetKey = CUSTOM_BACKGROUND_KEY;
-const customBackgroundInput = el("input", "mqc-preset-color-input");
-customBackgroundInput.type = "color";
-customBackgroundInput.value = DEFAULTS.customBackgroundColor;
-customBackgroundInput.setAttribute("aria-label", "배경 색 직접 고르기");
-customBackgroundButton.append(customBackgroundInput);
-backgroundPresetGrid.append(customBackgroundButton);
-backgroundPresetButtons.set(CUSTOM_BACKGROUND_KEY, customBackgroundButton);
 backgroundField.append(backgroundPresetGrid);
-
-function setCustomBackground(hex) {
-  customBackgroundButton.dataset.value = hex;
-  customBackgroundButton.style.backgroundColor = hex;
-  customBackgroundButton.style.color = isDarkHex(hex) ? "#f5f5f5" : "#3a3a3a";
-  customBackgroundInput.value = hex;
-}
-setCustomBackground(DEFAULTS.customBackgroundColor);
 
 const cardStyleField = makeField("카드 디자인");
 const cardStyleGrid = el("div", "mqc-style-grid");
@@ -906,60 +736,6 @@ CARD_STYLES.forEach(({ key, label }) => {
   cardStyleGrid.append(button);
 });
 cardStyleField.append(cardStyleGrid);
-
-// 형광펜: palette swatches apply a color to the text selected in the 발췌문
-// textarea (wrapping it in "=={#hex}...=="), plus palette editing, opacity
-// and the drawing style used on the card.
-const highlightBox = el("div", "mqc-regex-box mqc-highlight-box");
-const highlightHeader = el("div", "mqc-regex-header");
-highlightHeader.append(el("span", "mqc-label", "형광펜"));
-const highlightClearButton = el("button", "mqc-regex-add", "선택 영역 지우기");
-highlightClearButton.type = "button";
-highlightClearButton.title = "발췌문에서 선택한 부분의 형광펜을 지웁니다 (선택이 없으면 전부)";
-highlightHeader.append(highlightClearButton);
-const highlightPalette = el("div", "mqc-highlight-palette");
-const highlightAddInput = el("input", "mqc-highlight-add");
-highlightAddInput.type = "color";
-highlightAddInput.value = "#ffb300";
-highlightAddInput.title = "형광펜 색 추가";
-highlightAddInput.setAttribute("aria-label", "형광펜 색 추가");
-const highlightHint = el(
-  "div",
-  "mqc-hint",
-  "발췌문에서 글자를 드래그한 뒤 색을 누르면 칠해져요. 채팅에서 칠한 형광펜도 그대로 따라와요. 색을 우클릭하면 팔레트에서 빠져요.",
-);
-const highlightStyleRow = el("div", "mqc-compact-pair");
-const highlightStyleField = makeField("형광펜 모양");
-const highlightStyleSegments = el("div", "mqc-segments");
-HIGHLIGHT_STYLES.forEach(({ key, label }) => highlightStyleSegments.append(makeSegment(key, label, label)));
-highlightStyleField.append(highlightStyleSegments);
-const highlightOpacityField = makeField("진하기");
-const highlightOpacityRow = el("div", "mqc-color-row");
-const highlightOpacityInput = el("input", "mqc-range");
-highlightOpacityInput.type = "range";
-highlightOpacityInput.min = "0.15";
-highlightOpacityInput.max = "1";
-highlightOpacityInput.step = "0.05";
-const highlightOpacityValue = el("span", "mqc-color-value", "");
-highlightOpacityRow.append(highlightOpacityInput, highlightOpacityValue);
-highlightOpacityField.append(highlightOpacityRow);
-highlightStyleRow.append(highlightStyleField, highlightOpacityField);
-highlightBox.append(highlightHeader, highlightPalette, highlightHint, highlightStyleRow);
-
-// Recomputes the "테마" swatch from the site's current theme accent and
-// updates its button in place (dataset.value + visible swatch color) so
-// selecting it always reflects the live theme instead of a stale value from
-// a previous session.
-function refreshThemeBackgroundPreset(accentHex) {
-  const hex = resolveThemeBackgroundHex(accentHex);
-  const button = backgroundPresetButtons.get("theme");
-  if (button) {
-    button.dataset.value = hex;
-    button.style.backgroundColor = hex;
-    button.style.color = "#3a3a3a";
-  }
-  return hex;
-}
 
 const regexBox = el("div", "mqc-regex-box");
 const regexHeader = el("div", "mqc-regex-header");
@@ -1027,7 +803,6 @@ function insertRegexSymbol(symbol) {
 
 const status = el("div", "mqc-status", "");
 form.append(
-  pickerField,
   textField,
   el("div", "mqc-divider"),
   ratioAlignmentPair,
@@ -1038,7 +813,6 @@ form.append(
   footerLabelField,
   chatControlsPair,
   el("div", "mqc-divider"),
-  highlightBox,
   regexBox,
   status,
 );
@@ -1216,10 +990,6 @@ function settingsFromControls() {
     chatSideMode: chatSideIsCustom ? "custom" : "auto",
     chatRightSpeakers: [...chatRightSpeakersCustom],
     cardStyle: activeSegmentValue(cardStyleGrid, DEFAULTS.cardStyle),
-    customBackgroundColor: customBackgroundButton.dataset.value,
-    highlightColors: [...highlightPrefs.colors],
-    highlightOpacity: highlightPrefs.opacity,
-    highlightStyle: highlightPrefs.style,
   };
 }
 
@@ -1234,10 +1004,6 @@ function resolveRightSpeakerSet(speakerNames, settings) {
   if (settings.chatSideMode === "custom") {
     return new Set((settings.chatRightSpeakers || []).filter((name) => speakerNames.includes(name)));
   }
-  // Picked from a CONVO chat: the user's own messages go on the right, like
-  // a messenger, instead of guessing by appearance order.
-  const userNames = speakerNames.filter((name) => pickerUserSpeakers.has(name));
-  if (userNames.length) return new Set(userNames);
   return new Set(defaultRightSpeakers(speakerNames));
 }
 
@@ -1380,7 +1146,6 @@ const CHAT_LOG_TIMESTAMP_RE = new RegExp(`^${CHAT_LOG_TIMESTAMP_CORE_SRC}\\s*$`)
 // 대화록/말풍선 안 뜸", not just the block-count check fixed earlier.
 const CHAT_LOG_TIMESTAMP_SUFFIX_RE = new RegExp(`${CHAT_LOG_TIMESTAMP_CORE_SRC}\\s*$`);
 const CHAT_LOG_NAME_MAX_LENGTH = 24;
-const CHAT_LOG_HEADER_RE = /^\[([^[\]\n]{1,24})\]$/;
 const CHAT_LOG_NAME_BAD_ENDING_RE = /[.!?]\s*$/;
 
 function detectChatLog(text) {
@@ -1411,14 +1176,7 @@ function detectChatLog(text) {
 
     let nameLine = blockLines[0];
     let messageLines;
-    const headerMatch = CHAT_LOG_HEADER_RE.exec(nameLine);
-    if (headerMatch) {
-      // "[이름]" header — the format the 대사 고르기 picker writes. Explicit,
-      // so it counts as a chat log without any timestamp.
-      sawTimestamp = true;
-      nameLine = headerMatch[1].trim();
-      messageLines = blockLines.slice(1);
-    } else if (CHAT_LOG_TIMESTAMP_RE.test(blockLines[1])) {
+    if (CHAT_LOG_TIMESTAMP_RE.test(blockLines[1])) {
       // Separate-line shape: line 1 is the name, line 2 is nothing but the
       // timestamp.
       sawTimestamp = true;
@@ -1440,7 +1198,7 @@ function detectChatLog(text) {
     }
     if (!messageLines.length) return null;
 
-    parsed.push({ speaker: stripHighlightMarkers(nameLine), message: messageLines.join("\n") });
+    parsed.push({ speaker: nameLine, message: messageLines.join("\n") });
   }
 
   return sawTimestamp ? parsed : null;
@@ -1468,23 +1226,9 @@ function styledCharacters(text) {
   // read as more intense, not fainter.
   let emphasis = false;
   let bold = false;
-  // "==text==" / "=={#rrggbb}text==" highlighter markers — stripped like the
-  // asterisks, the color is carried on each character instead.
-  let highlight = null;
   const result = [];
   for (let i = 0; i < chars.length; i++) {
     const char = chars[i];
-    if (char === "=" && chars[i + 1] === "=") {
-      i++;
-      if (highlight) {
-        highlight = null;
-        continue;
-      }
-      const colorMatch = /^\{(#[0-9a-f]{6})\}/i.exec(chars.slice(i + 1, i + 10).join(""));
-      if (colorMatch) i += colorMatch[0].length;
-      highlight = colorMatch ? colorMatch[1].toLowerCase() : highlightPrefs.colors[0];
-      continue;
-    }
     if (char === "*") {
       if (chars[i + 1] === "*") {
         i++;
@@ -1505,15 +1249,9 @@ function styledCharacters(text) {
       dialogue = true;
       if (char === expectedCloser) expectedCloser = "";
     }
-    result.push({ char, dialogue, emphasis, bold, highlight });
+    result.push({ char, dialogue, emphasis, bold });
   }
   return result;
-}
-
-// Bubble mode wraps plain strings (no per-character styling), so markers
-// are removed there instead of being drawn literally.
-function stripHighlightMarkers(text) {
-  return text.replace(HIGHLIGHT_MARKER_RE, "");
 }
 
 // *emphasis* stays a color fade only, at the regular weight (italic was
@@ -1664,8 +1402,7 @@ function drawStyledLine(
     extraSpacing = (maxWidth - line.width) / Math.max(1, spaces || line.runs.length - 1);
   }
 
-  // Pass 1: x position of every run (alignment + justify spacing), so the
-  // highlighter can be painted underneath before any glyph is drawn.
+  // Pass 1: x position of every run (alignment + justify spacing).
   const xs = new Array(line.runs.length);
   line.runs.forEach((item, index) => {
     xs[index] = cursor;
@@ -1674,10 +1411,6 @@ function drawStyledLine(
       cursor += extraSpacing;
     }
   });
-
-  if (line.runs.some((item) => item.highlight)) {
-    drawLineHighlights(ctx, line.runs, xs, y, fontSize);
-  }
 
   // Pass 2: glyphs, batched into one fillText per run of identical styling
   // instead of one call per character. A batch is cut wherever justify
@@ -1717,60 +1450,6 @@ function drawStyledLine(
     expectedX = xs[index] + item.width;
   });
   flush();
-}
-
-// Highlighter shapes behind a line's glyphs. Consecutive runs with the same
-// color merge into one stroke so words don't look separately boxed.
-function drawLineHighlights(ctx, runs, xs, baselineY, fontSize) {
-  const style = highlightPrefs.style;
-  const segments = [];
-  runs.forEach((item, index) => {
-    if (!item.highlight) return;
-    const last = segments[segments.length - 1];
-    const right = xs[index] + item.width;
-    if (last && last.color === item.highlight && last.lastIndex === index - 1) {
-      last.right = right;
-      last.lastIndex = index;
-    } else {
-      segments.push({ color: item.highlight, left: xs[index], right, lastIndex: index });
-    }
-  });
-  ctx.save();
-  for (const segment of segments) {
-    // Don't paint a trailing space at the end of a highlighted run.
-    let right = segment.right;
-    const tail = runs[segment.lastIndex];
-    if (tail.char === " ") right -= tail.width;
-    const pad = fontSize * 0.12;
-    const left = segment.left - pad;
-    const width = right - segment.left + pad * 2;
-    if (width <= pad * 2) continue;
-    ctx.fillStyle = hexToRgba(segment.color, highlightPrefs.opacity);
-    if (style === "underline") {
-      const height = fontSize * 0.2;
-      traceRoundedRect(ctx, left, baselineY + fontSize * 0.08, width, height, height / 2);
-      ctx.fill();
-    } else if (style === "box") {
-      const top = baselineY - fontSize * 0.92;
-      const height = fontSize * 1.22;
-      traceRoundedRect(ctx, left, top, width, height, fontSize * 0.22);
-      ctx.fill();
-    } else {
-      // Marker: a slightly slanted band over the lower ~60% of the glyphs,
-      // like a real highlighter stroke.
-      const top = baselineY - fontSize * 0.55;
-      const height = fontSize * 0.68;
-      const skew = fontSize * 0.08;
-      ctx.beginPath();
-      ctx.moveTo(left + skew, top);
-      ctx.lineTo(left + width, top + skew * 0.4);
-      ctx.lineTo(left + width - skew, top + height);
-      ctx.lineTo(left, top + height - skew * 0.4);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-  ctx.restore();
 }
 
 function truncateLineAtWord(line) {
@@ -1999,16 +1678,14 @@ function drawBubbleRow(ctx, row, x, y, maxWidth, bubbleColors, family) {
 
 // Paints the card background and the decoration for settings.cardStyle.
 // Everything is drawn inside a rounded clip so the PNG's outer corners stay
-// alpha-transparent. Returns { skipDivider } for styles that draw their own
-// footer separator.
+// alpha-transparent.
 const CARD_OUTER_RADIUS = 48;
 function drawCardDecor(ctx, settings, layout) {
-  const { width: w, height: h, sideMargin, textTop, fontSize, lineHeight, dividerY } = layout;
+  const { width: w, height: h, sideMargin, dividerY } = layout;
   const bg = settings.backgroundColor;
   const accent = settings.dialogueColor;
   const dark = isDarkHex(bg);
   const style = CARD_STYLE_KEYS.has(settings.cardStyle) ? settings.cardStyle : "classic";
-  const result = { skipDivider: false };
 
   ctx.save();
   traceRoundedRect(ctx, 0, 0, w, h, CARD_OUTER_RADIUS);
@@ -2025,118 +1702,17 @@ function drawCardDecor(ctx, settings, layout) {
     traceRoundedRect(ctx, 26, 26, w - 52, h - 52, 42);
     ctx.stroke();
   } else if (style === "quote") {
-    // Oversized faded quotation marks + a short accent rule.
+    // Oversized faded quotation marks in the corners.
     ctx.fillStyle = hexToRgba(accent, dark ? 0.35 : 0.22);
     ctx.font = `700 260px Georgia, "Times New Roman", serif`;
     ctx.textBaseline = "alphabetic";
     ctx.fillText("“", sideMargin - 34, 250);
     const closeWidth = ctx.measureText("”").width;
     ctx.fillText("”", w - sideMargin - closeWidth + 34, dividerY + 120);
-    ctx.fillStyle = accent;
-    traceRoundedRect(ctx, sideMargin, 64, 72, 6, 3);
-    ctx.fill();
-  } else if (style === "note") {
-    // Ruled notebook paper: lines on the text baselines, a margin rule and
-    // binder holes down the left edge.
-    const ruleColor = dark ? "rgba(255,255,255,0.1)" : "rgba(60,90,140,0.14)";
-    ctx.strokeStyle = ruleColor;
-    ctx.lineWidth = 2;
-    const firstBaseline = textTop + fontSize + fontSize * 0.32;
-    const step = layout.ruledLines ? lineHeight : Math.round(fontSize * 1.45);
-    let lineY = firstBaseline;
-    while (lineY - step > 70) lineY -= step;
-    for (; lineY < dividerY - 12; lineY += step) {
-      ctx.beginPath();
-      ctx.moveTo(48, lineY);
-      ctx.lineTo(w - 40, lineY);
-      ctx.stroke();
-    }
-    ctx.strokeStyle = hexToRgba(accent, 0.55);
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(sideMargin - 22, 0);
-    ctx.lineTo(sideMargin - 22, h);
-    ctx.stroke();
-    ctx.globalCompositeOperation = "destination-out";
-    for (let holeY = 120; holeY < h - 80; holeY += 180) {
-      ctx.beginPath();
-      ctx.arc(30, holeY, 11, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalCompositeOperation = "source-over";
-  } else if (style === "frame") {
-    // Tinted mat around an inset panel, like a framed print.
-    ctx.fillStyle = mixHexColors(bg, accent, dark ? 0.28 : 0.2);
-    ctx.fillRect(0, 0, w, h);
-    ctx.shadowColor = "rgba(0,0,0,0.18)";
-    ctx.shadowBlur = 24;
-    ctx.shadowOffsetY = 6;
-    ctx.fillStyle = bg;
-    traceRoundedRect(ctx, 38, 38, w - 76, h - 76, 18);
-    ctx.fill();
-    ctx.shadowColor = "transparent";
-    ctx.strokeStyle = hexToRgba(accent, 0.5);
-    ctx.lineWidth = 1.5;
-    traceRoundedRect(ctx, 52, 52, w - 104, h - 104, 10);
-    ctx.stroke();
-  } else if (style === "ticket") {
-    // Dashed border, and notches punched out where the stub (footer) starts.
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.setLineDash([14, 10]);
-    traceRoundedRect(ctx, 26, 26, w - 52, h - 52, 30);
-    ctx.stroke();
-    ctx.lineWidth = 2;
-    ctx.globalAlpha = 0.6;
-    ctx.beginPath();
-    ctx.moveTo(56, dividerY);
-    ctx.lineTo(w - 56, dividerY);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.setLineDash([]);
-    ctx.globalCompositeOperation = "destination-out";
-    [0, w].forEach((x) => {
-      ctx.beginPath();
-      ctx.arc(x, dividerY, 30, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.globalCompositeOperation = "source-over";
-    result.skipDivider = true;
-  } else if (style === "glow") {
-    // Soft diagonal wash toward the accent plus two blurred light pools.
-    const wash = ctx.createLinearGradient(0, 0, w, h);
-    wash.addColorStop(0, bg);
-    wash.addColorStop(1, mixHexColors(bg, accent, dark ? 0.35 : 0.28));
-    ctx.fillStyle = wash;
-    ctx.fillRect(0, 0, w, h);
-    [
-      [w * 0.88, h * 0.08, Math.max(w, h) * 0.45],
-      [w * 0.05, h * 0.92, Math.max(w, h) * 0.4],
-    ].forEach(([x, y, r]) => {
-      const pool = ctx.createRadialGradient(x, y, 0, x, y, r);
-      pool.addColorStop(0, hexToRgba(accent, dark ? 0.35 : 0.3));
-      pool.addColorStop(1, hexToRgba(accent, 0));
-      ctx.fillStyle = pool;
-      ctx.fillRect(0, 0, w, h);
-    });
-  } else if (style === "film") {
-    // Film-strip bars with sprocket holes along the top and bottom edges.
-    const barHeight = 40;
-    ctx.fillStyle = dark ? "#000000" : "#16161a";
-    ctx.fillRect(0, 0, w, barHeight);
-    ctx.fillRect(0, h - barHeight, w, barHeight);
-    ctx.fillStyle = dark ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.85)";
-    for (let x = 34; x < w - 20; x += 52) {
-      traceRoundedRect(ctx, x, 13, 22, 14, 3);
-      ctx.fill();
-      traceRoundedRect(ctx, x, h - 27, 22, 14, 3);
-      ctx.fill();
-    }
   }
   // "minimal": background only.
 
   ctx.restore();
-  return result;
 }
 
 // `options.scale` (1/2/3, see EXPORT_SCALES) controls the RASTER resolution
@@ -2230,8 +1806,7 @@ async function renderCard(options = {}) {
   if (isBubbleMode) {
     const speakerNames = uniqueSpeakerNames(chatBlocks);
     rightSpeakerSet = resolveRightSpeakerSet(speakerNames, settings);
-    const plainBlocks = chatBlocks.map((block) => ({ ...block, message: stripHighlightMarkers(block.message) }));
-    rows = layoutBubbleRows(ctx, plainBlocks, maxWidth, fontSize, family, nameFontSize, rightSpeakerSet);
+    rows = layoutBubbleRows(ctx, chatBlocks, maxWidth, fontSize, family, nameFontSize, rightSpeakerSet);
   } else if (chatBlocks) {
     rows = layoutChatRows(ctx, chatBlocks, maxWidth, fontSize, family);
   } else {
@@ -2321,16 +1896,7 @@ async function renderCard(options = {}) {
   const dividerY = labelBaseline - 46;
   // Background + the picked 카드 디자인's decoration (see drawCardDecor). The
   // outer corners stay alpha-transparent in the saved PNG.
-  const decor = drawCardDecor(ctx, settings, {
-    width: ratioWidth,
-    height: ratioHeight,
-    sideMargin,
-    textTop,
-    fontSize,
-    lineHeight,
-    dividerY,
-    ruledLines: !chatBlocks,
-  });
+  drawCardDecor(ctx, settings, { width: ratioWidth, height: ratioHeight, sideMargin, dividerY });
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.shadowColor = "transparent";
@@ -2422,17 +1988,15 @@ async function renderCard(options = {}) {
   // custom string, never more than one at once — switchable via "하단 라벨".
   // Pinned to the bottom padding line rather than glued directly under the
   // body text.
-  if (!decor.skipDivider) {
-    ctx.save();
-    ctx.strokeStyle = isDarkHex(settings.backgroundColor) ? "#ffffff" : "#000000";
-    ctx.globalAlpha = 0.22;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(sideMargin, dividerY);
-    ctx.lineTo(ratioWidth - sideMargin, dividerY);
-    ctx.stroke();
-    ctx.restore();
-  }
+  ctx.save();
+  ctx.strokeStyle = isDarkHex(settings.backgroundColor) ? "#ffffff" : "#000000";
+  ctx.globalAlpha = 0.22;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(sideMargin, dividerY);
+  ctx.lineTo(ratioWidth - sideMargin, dividerY);
+  ctx.stroke();
+  ctx.restore();
 
   // Same font stack as the body text (family + generic sans-serif fallback)
   // so "MARINARA" and the character-name label render consistently instead
@@ -2490,26 +2054,13 @@ function closeModal() {
   flushSettings();
 }
 
-// Background presets are activated by their stable key, not by hex value —
-// the "직접" color can equal a preset's hex, and matching by value would
-// light up both swatches.
-function setActiveBackgroundPreset(key) {
-  backgroundPresetGrid.querySelectorAll(".mqc-preset").forEach((button) => {
-    button.dataset.active = String(button.dataset.presetKey === key);
-  });
-}
-
 async function openModal() {
   if (!selectedText || overlay.style.display === "flex") return;
-  hideSelectionBar();
-  hideHighlightEditBar();
+  selectionButton.style.display = "none";
   textArea.value = selectedText;
   const settings = loadSettings();
   status.textContent = "폰트 불러오는 중…";
   overlay.style.display = "flex";
-  buildPicker(selectedRange);
-  if (pickerMode === "convo" && pickerUnits.some((unit) => unit.checked)) textArea.value = textFromPicker();
-  renderPicker();
   await loadFonts();
   populateFonts(settings.font);
   setActiveSegment(ratioSegments, settings.ratio in RATIOS ? settings.ratio : "portrait");
@@ -2538,18 +2089,10 @@ async function openModal() {
   // (instead of relying on a value computed once at page load), so a theme
   // switch is picked up immediately without needing a reload.
   const themeAccentHex = resolveThemeColorHex("--primary", FALLBACK_ACCENT_HEX);
-  refreshThemeBackgroundPreset(themeAccentHex);
 
-  setCustomBackground(normalizeHex(settings.customBackgroundColor, DEFAULTS.customBackgroundColor));
-  const savedPresetKey = settings.backgroundPresetKey;
-  if (savedPresetKey === "theme" || savedPresetKey === CUSTOM_BACKGROUND_KEY) {
-    setActiveBackgroundPreset(savedPresetKey);
-  } else {
-    const preset =
-      BACKGROUND_PRESETS.find((item) => item.hex && item.key === savedPresetKey) ||
-      BACKGROUND_PRESETS.find((item) => item.hex && item.hex === settings.backgroundColor);
-    setActiveBackgroundPreset(preset?.key || "white");
-  }
+  // Saved "테마"/"직접" backgrounds (removed presets) fall back to white.
+  const savedPreset = BACKGROUND_PRESETS.find((preset) => preset.hex === settings.backgroundColor);
+  setActiveSegment(backgroundPresetGrid, savedPreset ? savedPreset.hex : DEFAULTS.backgroundColor);
   setActiveSegment(cardStyleGrid, CARD_STYLE_KEYS.has(settings.cardStyle) ? settings.cardStyle : DEFAULTS.cardStyle);
 
   dialogueColorIsCustom = settings.dialogueColorMode === "custom";
@@ -2567,8 +2110,6 @@ async function openModal() {
   chatRightSpeakersCustom = Array.isArray(settings.chatRightSpeakers) ? [...settings.chatRightSpeakers] : [];
   lastChatSpeakersKey = null; // force the 말풍선 방향 pills to rebuild for this fresh selection
 
-  syncHighlightControls();
-
   regexList.replaceChildren();
   const storedRules = Array.isArray(settings.regexRules)
     ? settings.regexRules
@@ -2580,185 +2121,10 @@ async function openModal() {
   await renderCard();
 }
 
-// --- 대사/문단 고르기 -------------------------------------------------------------
+// --- Selection button -----------------------------------------------------------
 
-const CONVO_AREA_SELECTOR = '[data-component="ChatArea.Conversation"]';
-// Messages listed on each side of the dragged ones.
-const PICKER_MESSAGE_WINDOW = 12;
-let selectedRange = null;
-let pickerMode = null; // "convo" (lines) | "prose" (paragraphs) | null
-let pickerUnits = [];
-// Prose keeps the exact dragged text until a checkbox is touched; CONVO is
-// always built from the checked lines.
-let pickerTouched = false;
-const pickerUserSpeakers = new Set();
-
-function messageSpeaker(messageEl) {
-  const name = messageEl.querySelector(".mari-message-name")?.textContent?.trim();
-  if (name) return name;
-  // Bubble-style layouts can hide the name line; the avatar's label
-  // ("레이라스의 자기소개 보기") still carries it.
-  const label = messageEl.querySelector(".mari-message-avatar [aria-label]")?.getAttribute("aria-label") || "";
-  const fromLabel = label.replace(/의 자기소개 보기$/, "").trim();
-  if (fromLabel && fromLabel !== label) return fromLabel;
-  return messageEl.dataset.messageRole === "user" ? "나" : "상대";
-}
-
-// One Range per line (CONVO renders each line as its own element — the
-// bubbles) or per paragraph (blank-line separated text, or block children).
-function unitRangesForMessage(messageEl, byLine) {
-  const ranges = [];
-  for (const block of visibleContentBlocks(messageEl)) {
-    const lineEls = byLine ? block.querySelectorAll(":scope > .space-y-1\\.5 > div") : [];
-    const children = lineEls.length ? lineEls : block.querySelectorAll(":scope > p, :scope > div");
-    if (lineEls.length || children.length >= 2) {
-      children.forEach((child) => {
-        const range = document.createRange();
-        range.selectNodeContents(child);
-        ranges.push(range);
-      });
-      continue;
-    }
-    const index = appendToIndex(block, { text: "", nodes: [] });
-    const pushPart = (start, end) => {
-      while (start < end && /\s/.test(index.text[start])) start++;
-      while (end > start && /\s/.test(index.text[end - 1])) end--;
-      const range = end > start && rangeFromOffsets(index, start, end);
-      if (range) ranges.push(range);
-    };
-    let start = 0;
-    for (const match of index.text.matchAll(byLine ? /\n+/g : /\n\s*\n/g)) {
-      pushPart(start, match.index);
-      start = match.index + match[0].length;
-    }
-    pushPart(start, index.text.length);
-  }
-  return ranges;
-}
-
-function rangesOverlap(a, b) {
-  return a.compareBoundaryPoints(Range.START_TO_END, b) > 0 && a.compareBoundaryPoints(Range.END_TO_START, b) < 0;
-}
-
-function buildPicker(range) {
-  pickerUnits = [];
-  pickerTouched = false;
-  pickerMode = null;
-  pickerUserSpeakers.clear();
-  if (!range) return;
-  const messages = [...document.querySelectorAll("[data-message-id]")];
-  const hit = messages.map((messageEl) => range.intersectsNode(messageEl));
-  const first = hit.indexOf(true);
-  if (first < 0) return;
-  const last = hit.lastIndexOf(true);
-  pickerMode = messages[first].closest(CONVO_AREA_SELECTOR) ? "convo" : "prose";
-  const from = Math.max(0, first - PICKER_MESSAGE_WINDOW);
-  const to = Math.min(messages.length - 1, last + PICKER_MESSAGE_WINDOW);
-  for (let i = from; i <= to; i++) {
-    const messageEl = messages[i];
-    const speaker = messageSpeaker(messageEl);
-    if (messageEl.dataset.messageRole === "user") pickerUserSpeakers.add(speaker);
-    for (const unitRange of unitRangesForMessage(messageEl, pickerMode === "convo")) {
-      const text = normalizeText(extractSelectionText(unitRange));
-      if (!text) continue;
-      pickerUnits.push({ messageIndex: i, speaker, text, checked: hit[i] && rangesOverlap(range, unitRange) });
-    }
-  }
-}
-
-// CONVO: consecutive checked lines from the same speaker share one "[이름]"
-// block (even across separate messages), which detectChatLog reads back.
-function textFromPicker() {
-  const picked = pickerUnits.filter((unit) => unit.checked);
-  if (pickerMode !== "convo") return picked.map((unit) => unit.text).join("\n\n");
-  const blocks = [];
-  for (const unit of picked) {
-    const lastBlock = blocks[blocks.length - 1];
-    if (lastBlock && lastBlock.speaker === unit.speaker) lastBlock.lines.push(unit.text);
-    else blocks.push({ speaker: unit.speaker, lines: [unit.text] });
-  }
-  return blocks.map((block) => `[${block.speaker}]\n${block.lines.join("\n")}`).join("\n\n");
-}
-
-function updatePickerCount() {
-  const checked = pickerUnits.filter((unit) => unit.checked).length;
-  pickerCount.textContent = `${checked}/${pickerUnits.length}`;
-}
-
-function renderPicker() {
-  pickerField.style.display = pickerUnits.length ? "" : "none";
-  if (!pickerUnits.length) return;
-  const isConvo = pickerMode === "convo";
-  pickerLabel.textContent = isConvo ? "대사 고르기" : "문단 고르기";
-  pickerHint.textContent = isConvo
-    ? "체크한 대사만 카드에 들어가요. 체크를 바꾸면 발췌문 칸이 새로 채워져요."
-    : "체크를 바꾸면 체크한 문단으로 발췌문 칸이 새로 채워져요.";
-  const fragment = document.createDocumentFragment();
-  let group = null;
-  pickerUnits.forEach((unit, index) => {
-    if (!group || group.messageIndex !== unit.messageIndex) {
-      group = { messageIndex: unit.messageIndex, el: el("div", "mqc-picker-message") };
-      const head = el("button", "mqc-picker-speaker", unit.speaker);
-      head.type = "button";
-      head.title = "이 메시지 전체 선택/해제";
-      head.dataset.message = String(unit.messageIndex);
-      group.el.append(head);
-      fragment.append(group.el);
-    }
-    const row = el("label", "mqc-picker-unit");
-    const box = el("input");
-    box.type = "checkbox";
-    box.checked = unit.checked;
-    box.dataset.unit = String(index);
-    row.append(box, el("span", "mqc-picker-text", unit.text.replace(HIGHLIGHT_MARKER_RE, "")));
-    group.el.append(row);
-  });
-  pickerList.replaceChildren(fragment);
-  updatePickerCount();
-  // Bring the first checked line into view inside the list.
-  const firstChecked = pickerList.querySelector("input:checked");
-  if (firstChecked) {
-    pickerList.scrollTop = Math.max(0, firstChecked.closest(".mqc-picker-message").offsetTop - pickerList.offsetTop - 8);
-  }
-}
-
-function applyPickerToText() {
-  pickerTouched = true;
-  pickerList.querySelectorAll("input[data-unit]").forEach((box) => {
-    box.checked = pickerUnits[Number(box.dataset.unit)].checked;
-  });
-  updatePickerCount();
-  textArea.value = textFromPicker();
-  queueRender();
-}
-
-marinaraCompat.on(pickerList, "change", (event) => {
-  const box = event.target.closest("input[data-unit]");
-  if (!box) return;
-  pickerUnits[Number(box.dataset.unit)].checked = box.checked;
-  applyPickerToText();
-});
-marinaraCompat.on(pickerList, "click", (event) => {
-  const head = event.target.closest(".mqc-picker-speaker");
-  if (!head) return;
-  const units = pickerUnits.filter((unit) => unit.messageIndex === Number(head.dataset.message));
-  const next = !units.every((unit) => unit.checked);
-  units.forEach((unit) => (unit.checked = next));
-  applyPickerToText();
-});
-marinaraCompat.on(pickerAllButton, "click", () => {
-  pickerUnits.forEach((unit) => (unit.checked = true));
-  applyPickerToText();
-});
-marinaraCompat.on(pickerNoneButton, "click", () => {
-  pickerUnits.forEach((unit) => (unit.checked = false));
-  applyPickerToText();
-});
-
-// --- Selection bar ------------------------------------------------------------
-
-function hideSelectionBar() {
-  selectionBar.style.display = "none";
+function hideSelectionButton() {
+  selectionButton.style.display = "none";
 }
 
 function currentSelectionRange() {
@@ -2769,10 +2135,10 @@ function currentSelectionRange() {
 // Sits on the same row as Marinara's "로어북에 추가" button when that button
 // is showing (to its right, else its left, else just under it); otherwise
 // centered just below the selection, flipping above it near the bottom edge.
-function positionSelectionBar(range) {
-  selectionBar.style.display = "flex";
-  const width = selectionBar.offsetWidth;
-  const height = selectionBar.offsetHeight;
+function positionSelectionButton(range) {
+  selectionButton.style.display = "flex";
+  const width = selectionButton.offsetWidth;
+  const height = selectionButton.offsetHeight;
   const gap = 6;
   const edge = 8;
   const rect = range.getBoundingClientRect();
@@ -2794,8 +2160,8 @@ function positionSelectionBar(range) {
     top = rect.bottom + 8;
     if (top + height > window.innerHeight - edge) top = rect.top - height - 8;
   }
-  selectionBar.style.left = `${Math.min(window.innerWidth - width - edge, Math.max(edge, left))}px`;
-  selectionBar.style.top = `${Math.min(window.innerHeight - height - edge, Math.max(edge, top))}px`;
+  selectionButton.style.left = `${Math.min(window.innerWidth - width - edge, Math.max(edge, left))}px`;
+  selectionButton.style.top = `${Math.min(window.innerHeight - height - edge, Math.max(edge, top))}px`;
 }
 
 function updateSelectionButton() {
@@ -2805,31 +2171,26 @@ function updateSelectionButton() {
   // Same rule as Marinara's own button: nothing for a selection that's
   // invisible or scrolled fully out of view.
   if (!rect || (!rect.width && !rect.height) || rect.bottom < 0 || rect.top > window.innerHeight) {
-    hideSelectionBar();
+    hideSelectionButton();
     return;
   }
   const text = normalizeText(extractSelectionText(range));
   if (!text) {
-    hideSelectionBar();
+    hideSelectionButton();
     return;
   }
   selectedText = text;
-  selectedRange = range.cloneRange();
   selectedChatTitle = resolveChatTitle();
-  hideHighlightEditBar();
-  positionSelectionBar(range);
+  positionSelectionButton(range);
 }
 
 // Marinara's own selection button follows scrolling, so ours does too
 // (it used to stay put and drift away from the text).
 let repositionFrame = 0;
-function repositionBarsOnScroll() {
-  if (selectionBar.style.display !== "flex" && highlightEditBar.style.display !== "flex") return;
+function repositionOnScroll() {
+  if (selectionButton.style.display !== "flex") return;
   cancelAnimationFrame(repositionFrame);
-  repositionFrame = requestAnimationFrame(() => {
-    hideHighlightEditBar();
-    if (selectionBar.style.display === "flex") updateSelectionButton();
-  });
+  repositionFrame = requestAnimationFrame(updateSelectionButton);
 }
 
 // --- Chat title ---------------------------------------------------------------
@@ -2873,507 +2234,20 @@ function scheduleSelectionUpdate(delay = 120) {
   selectionTimer = window.setTimeout(updateSelectionButton, delay);
 }
 
-// --- Chat highlighter -----------------------------------------------------------
-// Uses the CSS Custom Highlight API: ranges are painted by the browser
-// without inserting <mark> elements, so React-managed message markup is
-// never mutated (wrapping its text nodes breaks re-renders and streaming).
-// Each highlight is anchored to its message id plus the quoted text and a
-// little context on both sides, and re-resolved whenever messages re-render.
-
-const highlightSupported =
-  typeof CSS !== "undefined" && Boolean(CSS.highlights) && typeof Highlight === "function";
-const highlightStyleEl = marinaraCompat.addElement(document.head, "style", { "data-mqc-highlights": "" });
-const registeredHighlightNames = new Set();
-let highlightRecords = [];
-let highlightChatId = null;
-let resolvedHighlights = [];
-let editingHighlight = null;
-
-function newHighlightId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-function highlightStorageKey(chatId) {
-  return `${HIGHLIGHT_STORAGE_PREFIX}${chatId}`;
-}
-
-function loadHighlightRecords(chatId) {
-  if (!chatId) return [];
-  try {
-    const saved = JSON.parse(localStorage.getItem(highlightStorageKey(chatId)) || "[]");
-    return (Array.isArray(saved) ? saved : []).filter(
-      (record) => record && typeof record.messageId === "string" && typeof record.quote === "string" && record.quote,
-    ).map((record) => ({
-      id: String(record.id || newHighlightId()),
-      groupId: String(record.groupId || record.id || newHighlightId()),
-      messageId: record.messageId,
-      quote: record.quote,
-      prefix: typeof record.prefix === "string" ? record.prefix : "",
-      suffix: typeof record.suffix === "string" ? record.suffix : "",
-      color: normalizeHex(record.color, highlightPrefs.colors[0]),
-      createdAt: Number(record.createdAt) || Date.now(),
-    }));
-  } catch {
-    return [];
-  }
-}
-
-function saveHighlightRecords() {
-  if (!highlightChatId) return;
-  try {
-    if (highlightRecords.length) {
-      localStorage.setItem(highlightStorageKey(highlightChatId), JSON.stringify(highlightRecords));
-    } else {
-      localStorage.removeItem(highlightStorageKey(highlightChatId));
-    }
-  } catch {
-    status.textContent = "브라우저 저장 공간이 부족해서 형광펜을 저장하지 못했습니다.";
-  }
-}
-
-function messageElementById(messageId) {
-  return document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
-}
-
-// The message's visible text as one string plus where each text node starts
-// in it. 2.5.0 renders every message body twice (one copy display:none,
-// which copy depends on the layout), so only rendered content blocks count.
-const MESSAGE_BLOCK_SELECTOR = `${MESSAGE_TEXT_SELECTOR}, .mari-message-content ~ div.border-t.pt-2`;
-const textNodeFilter = {
-  acceptNode: (node) =>
-    node.parentElement?.closest("button, textarea, input, script, style") || !isRenderedText(node)
-      ? NodeFilter.FILTER_REJECT
-      : NodeFilter.FILTER_ACCEPT,
-};
-
-function visibleContentBlocks(messageEl) {
-  return [...messageEl.querySelectorAll(MESSAGE_BLOCK_SELECTOR)].filter((block) => block.getClientRects().length);
-}
-
-function appendToIndex(root, index) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, textNodeFilter);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    index.nodes.push({ node, start: index.text.length });
-    index.text += node.nodeValue;
-  }
-  return index;
-}
-
-function buildMessageIndex(messageEl) {
-  const index = { text: "", nodes: [] };
-  visibleContentBlocks(messageEl).forEach((block) => appendToIndex(block, index));
-  return index;
-}
-
-function commonSuffixLength(a, b) {
-  let n = 0;
-  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
-  return n;
-}
-
-function commonPrefixLength(a, b) {
-  let n = 0;
-  while (n < a.length && n < b.length && a[n] === b[n]) n++;
-  return n;
-}
-
-// Best occurrence of the quote inside the message, scored by how much of the
-// saved context still matches around it (the same sentence can repeat).
-function findHighlightOffsets(index, record) {
-  let best = null;
-  let bestScore = -1;
-  const full = record.prefix.length + record.suffix.length;
-  for (let at = index.text.indexOf(record.quote); at !== -1; at = index.text.indexOf(record.quote, at + 1)) {
-    const end = at + record.quote.length;
-    const score =
-      commonSuffixLength(index.text.slice(Math.max(0, at - record.prefix.length), at), record.prefix) +
-      commonPrefixLength(index.text.slice(end, end + record.suffix.length), record.suffix);
-    if (score > bestScore) {
-      best = { start: at, end };
-      bestScore = score;
-    }
-    if (score === full) break;
-  }
-  return best;
-}
-
-function rangeFromOffsets(index, start, end) {
-  let startNode = null;
-  let endNode = null;
-  for (const entry of index.nodes) {
-    const length = entry.node.nodeValue.length;
-    if (!startNode && start < entry.start + length) startNode = { node: entry.node, offset: start - entry.start };
-    if (end <= entry.start + length) {
-      endNode = { node: entry.node, offset: end - entry.start };
-      break;
-    }
-  }
-  if (!startNode || !endNode) return null;
-  const range = document.createRange();
-  range.setStart(startNode.node, startNode.offset);
-  range.setEnd(endNode.node, endNode.offset);
-  return range;
-}
-
-// Offsets of the selection inside one message's index, whitespace-trimmed.
-function selectionOffsetsInMessage(range, index) {
-  let start = -1;
-  let end = -1;
-  for (const entry of index.nodes) {
-    if (!range.intersectsNode(entry.node)) continue;
-    const from = entry.node === range.startContainer ? range.startOffset : 0;
-    const to = entry.node === range.endContainer ? range.endOffset : entry.node.nodeValue.length;
-    if (to <= from) continue;
-    if (start < 0) start = entry.start + from;
-    end = entry.start + to;
-  }
-  if (start < 0) return null;
-  while (start < end && /\s/.test(index.text[start])) start++;
-  while (end > start && /\s/.test(index.text[end - 1])) end--;
-  return end > start ? { start, end } : null;
-}
-
-function applyChatHighlights() {
-  if (!highlightSupported) return;
-  const chatId = activeChatId();
-  if (chatId !== highlightChatId) {
-    highlightChatId = chatId;
-    highlightRecords = loadHighlightRecords(chatId);
-  }
-  if (!highlightRecords.length && !resolvedHighlights.length && !registeredHighlightNames.size) return;
-
-  const resolved = [];
-  const rangesByColor = new Map();
-  const indexByMessage = new Map();
-  for (const record of highlightRecords) {
-    let index = indexByMessage.get(record.messageId);
-    if (index === undefined) {
-      const messageEl = messageElementById(record.messageId);
-      index = messageEl ? buildMessageIndex(messageEl) : null;
-      indexByMessage.set(record.messageId, index);
-    }
-    if (!index) continue;
-    const offsets = findHighlightOffsets(index, record);
-    const range = offsets && rangeFromOffsets(index, offsets.start, offsets.end);
-    if (!range) continue;
-    resolved.push({ record, range });
-    if (!rangesByColor.has(record.color)) rangesByColor.set(record.color, []);
-    rangesByColor.get(record.color).push(range);
-  }
-  resolvedHighlights = resolved;
-
-  registeredHighlightNames.forEach((name) => CSS.highlights.delete(name));
-  registeredHighlightNames.clear();
-  let css = "";
-  const alpha = Math.min(0.85, highlightPrefs.opacity);
-  rangesByColor.forEach((ranges, color) => {
-    const name = `mqc-hl-${color.slice(1)}`;
-    CSS.highlights.set(name, new Highlight(...ranges));
-    registeredHighlightNames.add(name);
-    css += `::highlight(${name}){background-color:${hexToRgba(color, alpha)};}\n`;
-  });
-  if (highlightStyleEl.textContent !== css) highlightStyleEl.textContent = css;
-}
-
-function addHighlightFromSelection(color) {
-  const range = currentSelectionRange();
-  const chatId = activeChatId();
-  if (!range || !chatId) return;
-  if (chatId !== highlightChatId) applyChatHighlights();
-  const groupId = newHighlightId();
-  const messages = [...document.querySelectorAll("[data-message-id]")].filter((messageEl) =>
-    range.intersectsNode(messageEl),
-  );
-  for (const messageEl of messages) {
-    const index = buildMessageIndex(messageEl);
-    const offsets = selectionOffsetsInMessage(range, index);
-    if (!offsets) continue;
-    const messageId = messageEl.dataset.messageId;
-    // Painting over an existing highlight replaces it instead of stacking.
-    highlightRecords = highlightRecords.filter((record) => {
-      if (record.messageId !== messageId) return true;
-      const existing = findHighlightOffsets(index, record);
-      return !existing || existing.end <= offsets.start || existing.start >= offsets.end;
-    });
-    highlightRecords.push({
-      id: newHighlightId(),
-      groupId,
-      messageId,
-      quote: index.text.slice(offsets.start, offsets.end),
-      prefix: index.text.slice(Math.max(0, offsets.start - HIGHLIGHT_CONTEXT_LENGTH), offsets.start),
-      suffix: index.text.slice(offsets.end, offsets.end + HIGHLIGHT_CONTEXT_LENGTH),
-      color,
-      createdAt: Date.now(),
-    });
-  }
-  saveHighlightRecords();
-  applyChatHighlights();
-  window.getSelection()?.removeAllRanges();
-  hideSelectionBar();
-}
-
-function updateHighlightGroup(groupId, color) {
-  if (color) {
-    highlightRecords.forEach((record) => {
-      if (record.groupId === groupId) record.color = color;
-    });
-  } else {
-    highlightRecords = highlightRecords.filter((record) => record.groupId !== groupId);
-  }
-  saveHighlightRecords();
-  applyChatHighlights();
-}
-
-function caretFromPoint(x, y) {
-  if (document.caretPositionFromPoint) {
-    const position = document.caretPositionFromPoint(x, y);
-    return position && { node: position.offsetNode, offset: position.offset };
-  }
-  if (document.caretRangeFromPoint) {
-    const range = document.caretRangeFromPoint(x, y);
-    return range && { node: range.startContainer, offset: range.startOffset };
-  }
-  return null;
-}
-
-function highlightAtPoint(x, y) {
-  if (!resolvedHighlights.length) return null;
-  const caret = caretFromPoint(x, y);
-  if (!caret?.node) return null;
-  for (const entry of resolvedHighlights) {
-    try {
-      if (entry.range.isPointInRange(caret.node, caret.offset)) return entry;
-    } catch {
-      // Detached node — the message re-rendered; the observer re-resolves.
-    }
-  }
-  return null;
-}
-
-function hideHighlightEditBar() {
-  highlightEditBar.style.display = "none";
-  editingHighlight = null;
-}
-
-function openHighlightEditBar(entry, x, y) {
-  editingHighlight = entry.record;
-  editSwatches.querySelectorAll(".mqc-bar-swatch").forEach((swatch) => {
-    swatch.dataset.current = String(swatch.dataset.color === entry.record.color);
-  });
-  highlightEditBar.style.display = "flex";
-  const width = highlightEditBar.offsetWidth;
-  const height = highlightEditBar.offsetHeight;
-  let top = y + 16;
-  if (top + height > window.innerHeight - 8) top = y - height - 16;
-  highlightEditBar.style.left = `${Math.min(window.innerWidth - width - 8, Math.max(8, x - width / 2))}px`;
-  highlightEditBar.style.top = `${Math.min(window.innerHeight - height - 8, Math.max(8, top))}px`;
-}
-
-function makeBarSwatch(color) {
-  const swatch = el("button", "mqc-bar-swatch");
-  swatch.type = "button";
-  swatch.dataset.color = color;
-  swatch.style.backgroundColor = color;
-  swatch.title = `형광펜 ${color.toUpperCase()}`;
-  swatch.setAttribute("aria-label", `형광펜 ${color.toUpperCase()}`);
-  return swatch;
-}
-
-function renderBarSwatches() {
-  selectionSwatches.replaceChildren(...highlightPrefs.colors.map(makeBarSwatch));
-  editSwatches.replaceChildren(...highlightPrefs.colors.map(makeBarSwatch));
-  selectionSwatches.hidden = !highlightSupported;
-}
-
-let highlightApplyTimer = 0;
-function scheduleHighlightApply(delay = 250) {
-  window.clearTimeout(highlightApplyTimer);
-  highlightApplyTimer = window.setTimeout(applyChatHighlights, delay);
-}
-
-const isOwnUiNode = (node) =>
-  node === highlightStyleEl || overlay.contains(node) || selectionBar.contains(node) || highlightEditBar.contains(node);
-const highlightObserver = highlightSupported
-  ? new MutationObserver((mutations) => {
-      if (mutations.every((mutation) => isOwnUiNode(mutation.target))) return;
-      scheduleHighlightApply();
-    })
-  : null;
-highlightObserver?.observe(document.body, { childList: true, subtree: true, characterData: true });
-cleanupTasks.push(() => {
-  highlightObserver?.disconnect();
-  if (highlightSupported) registeredHighlightNames.forEach((name) => CSS.highlights.delete(name));
-});
-
-// --- Dialog: highlighter controls ------------------------------------------------
-
-// Parses "==…==" markers into per-character highlight colors so painting or
-// clearing a textarea selection can rewrite the markup without nesting
-// markers. rawToPlain maps every raw textarea index to its plain-text index.
-function parseHighlightMarkup(value) {
-  const chars = [];
-  const rawToPlain = new Array(value.length + 1);
-  let color = null;
-  let i = 0;
-  while (i < value.length) {
-    rawToPlain[i] = chars.length;
-    if (value[i] === "=" && value[i + 1] === "=") {
-      let length = 2;
-      if (color) {
-        color = null;
-      } else {
-        const match = /^\{(#[0-9a-f]{6})\}/i.exec(value.slice(i + 2, i + 11));
-        if (match) length += match[0].length;
-        color = match ? match[1].toLowerCase() : highlightPrefs.colors[0];
-      }
-      for (let k = 1; k < length; k++) rawToPlain[i + k] = chars.length;
-      i += length;
-      continue;
-    }
-    chars.push({ char: value[i], color });
-    i++;
-  }
-  rawToPlain[value.length] = chars.length;
-  return { chars, rawToPlain };
-}
-
-function serializeHighlightMarkup(chars) {
-  let out = "";
-  let open = null;
-  for (const { char, color } of chars) {
-    if (color !== open) {
-      if (open) out += "==";
-      if (color) out += `=={${color}}`;
-      open = color;
-    }
-    out += char;
-  }
-  if (open) out += "==";
-  return out;
-}
-
-// color === null clears. With nothing selected, "clear" clears everything.
-function paintTextareaSelection(color) {
-  const { selectionStart, selectionEnd, value } = textArea;
-  if (selectionStart === selectionEnd && color) {
-    status.textContent = "발췌문에서 칠할 부분을 먼저 드래그해 주세요.";
-    return;
-  }
-  const { chars, rawToPlain } = parseHighlightMarkup(value);
-  const from = selectionStart === selectionEnd ? 0 : rawToPlain[selectionStart];
-  const to = selectionStart === selectionEnd ? chars.length : rawToPlain[selectionEnd];
-  for (let i = from; i < to; i++) {
-    // Line breaks stay unpainted so a highlight never spans an empty line.
-    chars[i].color = color && chars[i].char !== "\n" ? color : null;
-  }
-  const next = serializeHighlightMarkup(chars);
-  textArea.value = next;
-  const caret = serializeHighlightMarkup(chars.slice(0, to)).length;
-  textArea.focus();
-  textArea.setSelectionRange(caret, caret);
-  queueRender();
-}
-
-function syncHighlightControls() {
-  highlightPalette.replaceChildren(
-    ...highlightPrefs.colors.map((color) => {
-      const swatch = makeBarSwatch(color);
-      swatch.title = `${color.toUpperCase()} — 선택한 부분 칠하기 (우클릭: 팔레트에서 빼기)`;
-      return swatch;
-    }),
-  );
-  if (highlightPrefs.colors.length < MAX_HIGHLIGHT_COLORS) highlightPalette.append(highlightAddInput);
-  setActiveSegment(highlightStyleSegments, highlightPrefs.style);
-  highlightOpacityInput.value = String(highlightPrefs.opacity);
-  highlightOpacityValue.textContent = `${Math.round(highlightPrefs.opacity * 100)}%`;
-  renderBarSwatches();
-}
-
-function highlightPrefsChanged() {
-  persistHighlightPrefs();
-  syncHighlightControls();
-  applyChatHighlights();
-  queueRender();
-}
-
-// Keep the textarea's selection while clicking palette swatches.
-marinaraCompat.on(highlightPalette, "mousedown", (event) => {
-  if (event.target.closest(".mqc-bar-swatch")) event.preventDefault();
-});
-marinaraCompat.on(highlightPalette, "click", (event) => {
-  const swatch = event.target.closest(".mqc-bar-swatch");
-  if (swatch) paintTextareaSelection(swatch.dataset.color);
-});
-marinaraCompat.on(highlightPalette, "contextmenu", (event) => {
-  const swatch = event.target.closest(".mqc-bar-swatch");
-  if (!swatch) return;
-  event.preventDefault();
-  if (highlightPrefs.colors.length <= 1) {
-    status.textContent = "형광펜 색은 최소 1개는 있어야 해요.";
-    return;
-  }
-  highlightPrefs.colors = highlightPrefs.colors.filter((color) => color !== swatch.dataset.color);
-  highlightPrefsChanged();
-});
-marinaraCompat.on(highlightAddInput, "change", () => {
-  const color = normalizeHex(highlightAddInput.value, null);
-  if (!color || highlightPrefs.colors.includes(color)) return;
-  highlightPrefs.colors = [...highlightPrefs.colors, color].slice(0, MAX_HIGHLIGHT_COLORS);
-  highlightPrefsChanged();
-});
-marinaraCompat.on(highlightClearButton, "mousedown", (event) => event.preventDefault());
-marinaraCompat.on(highlightClearButton, "click", () => paintTextareaSelection(null));
-marinaraCompat.on(highlightStyleSegments, "click", (event) => {
-  const button = event.target.closest(".mqc-segment[data-value]");
-  if (!button) return;
-  highlightPrefs.style = button.dataset.value;
-  highlightPrefsChanged();
-});
-marinaraCompat.on(highlightOpacityInput, "input", () => {
-  highlightPrefs.opacity = Math.min(1, Math.max(0.15, Number(highlightOpacityInput.value) || DEFAULTS.highlightOpacity));
-  highlightOpacityValue.textContent = `${Math.round(highlightPrefs.opacity * 100)}%`;
-  persistHighlightPrefs();
-  scheduleHighlightApply(60);
-  queueRender();
-});
-
 // --- Event wiring -----------------------------------------------------------------
 
 const isEditableTarget = (target) => Boolean(target?.closest?.("input, textarea, [contenteditable='true']"));
 marinaraCompat.on(document, "selectionchange", () => scheduleSelectionUpdate(180));
-marinaraCompat.on(document, "pointerup", (event) => {
-  scheduleSelectionUpdate(80);
-  // A plain click (no selection) on painted chat text opens the edit bar.
-  if (event.button !== 0 || overlay.style.display === "flex") return;
-  if (selectionBar.contains(event.target) || highlightEditBar.contains(event.target)) return;
-  if (!event.target.closest?.("[data-message-id]")) return;
-  const { clientX: x, clientY: y } = event;
-  window.setTimeout(() => {
-    if (!window.getSelection()?.isCollapsed) return;
-    const entry = highlightAtPoint(x, y);
-    if (entry) openHighlightEditBar(entry, x, y);
-  }, 30);
-});
+marinaraCompat.on(document, "pointerup", () => scheduleSelectionUpdate(80));
 marinaraCompat.on(document, "touchend", () => scheduleSelectionUpdate(220));
 marinaraCompat.on(document, "keyup", (event) => {
   if (!isEditableTarget(event.target)) scheduleSelectionUpdate(0);
 });
 marinaraCompat.on(document, "pointerdown", (event) => {
-  if (!selectionBar.contains(event.target)) hideSelectionBar();
-  if (!highlightEditBar.contains(event.target)) hideHighlightEditBar();
+  if (!selectionButton.contains(event.target)) hideSelectionButton();
 });
-marinaraCompat.on(window, "scroll", repositionBarsOnScroll, { capture: true, passive: true });
-marinaraCompat.on(
-  window,
-  "resize",
-  () => {
-    repositionBarsOnScroll();
-    // Which of the two message-body copies is visible can flip with the
-    // layout breakpoint, which no DOM mutation reports.
-    if (highlightRecords.length) scheduleHighlightApply(300);
-  },
-  { passive: true },
-);
+marinaraCompat.on(window, "scroll", repositionOnScroll, { capture: true, passive: true });
+marinaraCompat.on(window, "resize", repositionOnScroll, { passive: true });
 
 marinaraCompat.on(selectionButton, "pointerdown", (event) => {
   openingFromPointer = true;
@@ -3399,28 +2273,6 @@ marinaraCompat.on(selectionButton, "click", (event) => {
   event.stopPropagation();
   void openModal();
 });
-// Swatches: preventDefault on press so the chat selection survives until
-// the click lands.
-[selectionSwatches, editSwatches, editDeleteButton].forEach((target) =>
-  marinaraCompat.on(target, "pointerdown", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  }),
-);
-marinaraCompat.on(selectionSwatches, "click", (event) => {
-  const swatch = event.target.closest(".mqc-bar-swatch");
-  if (swatch) addHighlightFromSelection(swatch.dataset.color);
-});
-marinaraCompat.on(editSwatches, "click", (event) => {
-  const swatch = event.target.closest(".mqc-bar-swatch");
-  if (swatch && editingHighlight) updateHighlightGroup(editingHighlight.groupId, swatch.dataset.color);
-  hideHighlightEditBar();
-});
-marinaraCompat.on(editDeleteButton, "click", () => {
-  if (editingHighlight) updateHighlightGroup(editingHighlight.groupId, null);
-  hideHighlightEditBar();
-});
-
 marinaraCompat.on(closeButton, "click", closeModal);
 marinaraCompat.on(cancelButton, "click", closeModal);
 marinaraCompat.on(overlay, "click", (event) => {
@@ -3429,13 +2281,12 @@ marinaraCompat.on(overlay, "click", (event) => {
 marinaraCompat.on(document, "keydown", (event) => {
   if (event.key !== "Escape") return;
   if (overlay.style.display === "flex") closeModal();
-  hideHighlightEditBar();
 });
 marinaraCompat.on(textArea, "input", queueRender);
 marinaraCompat.on(fontSelect, "change", queueRender);
 
 // Segmented-control groups (이미지 비율, 본문 정렬, 하단 라벨, 채팅 로그
-// 스타일, 저장 배율, 카드 디자인) share the same "click a segment → activate
+// 스타일, 저장 배율, 카드 디자인, 배경) share the same "click a segment → activate
 // it → re-render" wiring.
 function wireSegmentClicks(container) {
   marinaraCompat.on(container, "click", (event) => {
@@ -3445,20 +2296,15 @@ function wireSegmentClicks(container) {
     queueRender();
   });
 }
-[ratioSegments, alignmentSegments, footerLabelSegments, chatStyleSegments, exportScaleSegments, cardStyleGrid].forEach(
-  wireSegmentClicks,
-);
-marinaraCompat.on(backgroundPresetGrid, "click", (event) => {
-  const button = event.target.closest(".mqc-preset[data-preset-key]");
-  if (!button) return;
-  setActiveBackgroundPreset(button.dataset.presetKey);
-  queueRender();
-});
-marinaraCompat.on(customBackgroundInput, "input", () => {
-  setCustomBackground(customBackgroundInput.value);
-  setActiveBackgroundPreset(CUSTOM_BACKGROUND_KEY);
-  queueRender();
-});
+[
+  ratioSegments,
+  alignmentSegments,
+  footerLabelSegments,
+  chatStyleSegments,
+  exportScaleSegments,
+  cardStyleGrid,
+  backgroundPresetGrid,
+].forEach(wireSegmentClicks);
 // footerCustomLabelInput is itself one of 하단 라벨's segments — clicking it
 // already activates "custom" via wireSegmentClicks above. These cover
 // keyboard focus and typing, which need to (re)activate it too.
@@ -3524,13 +2370,9 @@ marinaraCompat.on(saveButton, "click", async () => {
   }, "image/png");
 });
 
-syncHighlightControls();
-applyChatHighlights();
-
 marinara.onCleanup(() => {
   window.clearTimeout(renderTimer);
   window.clearTimeout(selectionTimer);
-  window.clearTimeout(highlightApplyTimer);
   cancelAnimationFrame(repositionFrame);
   flushSettings();
   fontRequestController.abort();
