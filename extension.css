@@ -874,3 +874,11 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Inline controls inside message text (e.g. the TTS "＋ ▷ □" buttons) can't
+   be caught in a drag selection, so they never end up in an excerpt. */
+.mari-message-content .mari-tts-line-controls,
+.mari-message-content button {
+  -webkit-user-select: none;
+  user-select: none;
+}

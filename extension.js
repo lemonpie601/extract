@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.2";
+const EXTENSION_VERSION = "2.5.3";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -505,11 +505,17 @@ function isRenderedText(node, cache) {
   return visible;
 }
 
-// Walks the range's text nodes in document order, clipping the first/last
-// node to the range's actual start/endOffset, inserting a newline whenever
-// the nearest block-level ancestor changes (approximating what
-// selection.toString() does for line breaks between paragraphs/messages)
-// and wrapping runs of italic-rendered text in "*...*".
+// Controls other extensions put inline in message text — e.g. the TTS
+// "＋ ▷ □" buttons (.mari-tts-line-controls) — are not part of the excerpt.
+// Their whole subtree is skipped here, and CSS makes them unselectable.
+const NON_TEXT_SELECTOR = "button, .mari-tts-line-controls, textarea, input, script, style";
+
+// Walks the range in document order, clipping the first/last text node to
+// the range's actual start/endOffset. Line breaks come from two places:
+// <br> elements (Marinara 2.5.0 separates paragraphs with <br>, not "\n"
+// characters — reading only text nodes glued paragraphs together) and a
+// change of the nearest block-level ancestor (between paragraphs/messages).
+// Runs of italic-rendered text are wrapped in "*...*".
 function extractSelectionText(range) {
   const boundary =
     range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
@@ -518,11 +524,17 @@ function extractSelectionText(range) {
   if (!boundary) return "";
   // Sibling text nodes share a parent, so visibility is checked per parent.
   const visibilityCache = new Map();
-  const walker = document.createTreeWalker(boundary, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) =>
-      range.intersectsNode(node) && isRenderedText(node, visibilityCache)
+  const walker = document.createTreeWalker(boundary, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (node) => {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === "BR") return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        // REJECT skips the element's whole subtree; SKIP just descends.
+        return node.matches(NON_TEXT_SELECTOR) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+      }
+      return range.intersectsNode(node) && isRenderedText(node, visibilityCache)
         ? NodeFilter.FILTER_ACCEPT
-        : NodeFilter.FILTER_REJECT,
+        : NodeFilter.FILTER_REJECT;
+    },
   });
   // See classifyAncestor's comment — scoped to this one extraction so shared
   // ancestors across the selection's text nodes are classified only once.
@@ -532,6 +544,17 @@ function extractSelectionText(range) {
   let hasLastBlock = false;
   let italicOpen = false;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      // <br>: a line break (two in a row make the blank line between
+      // paragraphs). Emphasis is closed first so "*" never spans lines.
+      if (!hasLastBlock || !isRenderedText(node, visibilityCache)) continue;
+      if (italicOpen) {
+        result += "*";
+        italicOpen = false;
+      }
+      result += "\n";
+      continue;
+    }
     const start = node === range.startContainer ? range.startOffset : 0;
     const end = node === range.endContainer ? range.endOffset : node.textContent.length;
     if (end <= start) continue;
@@ -545,7 +568,8 @@ function extractSelectionText(range) {
         result += "*";
         italicOpen = false;
       }
-      result += "\n";
+      // A <br> right before a block change already ended the line.
+      if (!result.endsWith("\n")) result += "\n";
     }
     lastBlock = block;
     hasLastBlock = true;

@@ -3,7 +3,7 @@
   "version": 1,
   "config": {
     "name": "마리나라 발췌 카드 (마개조)",
-    "version": "2.5.2",
+    "version": "2.5.3",
     "description": "채팅에서 드래그한 글을 폰트·배경·카드 디자인을 골라 한 장의 PNG 이미지로 저장합니다. (Marinara Engine v2.5.0 대응)",
     "runtime": "client",
     "capabilities": [
