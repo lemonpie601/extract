@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.3";
+const EXTENSION_VERSION = "2.5.4";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -1043,20 +1043,34 @@ async function apiJson(path) {
 // minutes instead of on every single dialog open.
 const FONT_CACHE_MS = 5 * 60_000;
 let fontsLoadedAt = 0;
+// A failed request isn't retried on every open either.
+const FONT_RETRY_MS = 60_000;
+let fontsFailedAt = 0;
+// Resolves true when a new list arrived (the dropdown needs rebuilding).
 async function loadFonts() {
-  if (fontsLoadedAt && Date.now() - fontsLoadedAt < FONT_CACHE_MS) return;
+  if (fontsLoadedAt && Date.now() - fontsLoadedAt < FONT_CACHE_MS) return false;
+  if (fontsFailedAt && Date.now() - fontsFailedAt < FONT_RETRY_MS) return false;
   try {
     const result = await apiJson("/fonts");
     fonts = Array.isArray(result) ? result : [];
     fontsLoadedAt = Date.now();
+    return true;
   } catch {
     // Offline, blocked, or empty library — dropdown just falls back to the
     // single "기본 (Inter)" option below.
-    fonts = [];
+    fontsFailedAt = Date.now();
+    return false;
   }
 }
 
+// Rebuilt only when the font list itself changed; otherwise just reselects.
+let populatedFonts = null;
 function populateFonts(selected) {
+  if (populatedFonts === fonts && fontSelect.querySelector(`option[value="${CSS.escape(selected)}"]`)) {
+    fontSelect.value = selected;
+    return;
+  }
+  populatedFonts = fonts;
   fontSelect.replaceChildren();
   const defaultOption = el("option", "", "기본 (Inter)");
   defaultOption.value = "";
@@ -1070,6 +1084,14 @@ function populateFonts(selected) {
     option.value = family;
     fontSelect.append(option);
   });
+  // Until the library has loaded once, keep the saved font as its own option
+  // instead of silently falling back to the default.
+  if (selected && !seen.has(selected) && !fontsLoadedAt) {
+    const pending = el("option", "", selected);
+    pending.value = selected;
+    fontSelect.append(pending);
+    seen.add(selected);
+  }
   fontSelect.value = seen.has(selected) ? selected : "";
 }
 
@@ -2130,18 +2152,25 @@ async function renderCard(options = {}) {
   // fillText's glyph size) so a save at 2×/3× still comes out at N× the
   // pixels without touching a single x/y/fontSize elsewhere in this
   // function.
-  const renderScale = EXPORT_SCALES.includes(options.scale) ? options.scale : 1;
+  // Exports (options.scale given) draw the full-resolution file offscreen.
+  // The preview draws straight into the visible canvas at roughly the pixel
+  // size it's displayed at — a tall card shown a few hundred pixels wide no
+  // longer gets a full 1080-wide raster (a 1080×7922 preview was ~34MB).
+  const isExport = options.scale !== undefined;
+  const renderScale = isExport
+    ? EXPORT_SCALES.includes(options.scale)
+      ? options.scale
+      : 1
+    : previewPixelScale(ratioHeight);
   // Nothing visible changed (e.g. the same segment clicked again) — keep
   // the current preview instead of repainting the whole card.
-  const renderKey = `${layoutKey}\u0000${JSON.stringify(settings)}\u0000${selectedChatTitle}\u0000${ratioHeight}`;
-  if (renderScale === 1 && renderKey === lastPreviewKey) return canvas;
-  // The preview is drawn directly into the visible canvas at 1×; only an
-  // export at 2×/3× renders into the offscreen canvas (no copy step either way).
-  const target = renderScale === 1 ? canvas : offscreenCanvas;
-  const ctx = renderScale === 1 ? previewCtx : offscreenCtx;
-  target.width = ratioWidth * renderScale;
-  target.height = ratioHeight * renderScale;
-  if (renderScale === 1) lastPreviewKey = renderKey;
+  const renderKey = `${layoutKey}\u0000${JSON.stringify(settings)}\u0000${selectedChatTitle}\u0000${ratioHeight}\u0000${renderScale}`;
+  if (!isExport && renderKey === lastPreviewKey) return canvas;
+  const target = isExport ? offscreenCanvas : canvas;
+  const ctx = isExport ? offscreenCtx : previewCtx;
+  target.width = Math.round(ratioWidth * renderScale);
+  target.height = Math.round(ratioHeight * renderScale);
+  if (!isExport) lastPreviewKey = renderKey;
   // Resizing a canvas clears it and resets context state (including the
   // transform) to identity, so this is safe to set unconditionally right
   // after the resize above.
@@ -2308,6 +2337,19 @@ async function renderCard(options = {}) {
   return target;
 }
 
+// Pixel scale for the preview canvas: its on-screen width (capped by the
+// pane and by its max-height for tall cards) times devicePixelRatio, rounded
+// up to 5% steps so small layout changes don't force a repaint. Never below
+// 0.3 so the preview stays legible, never above 1 (the file's own size).
+function previewPixelScale(ratioHeight) {
+  const paneWidth = previewPane.clientWidth;
+  const paneHeight = previewPane.clientHeight;
+  if (!paneWidth || !paneHeight) return 1;
+  const shownWidth = Math.min(500, paneWidth, (paneHeight * CARD_WIDTH) / ratioHeight);
+  const scale = (shownWidth * (window.devicePixelRatio || 1)) / CARD_WIDTH;
+  return Math.min(1, Math.max(0.3, Math.ceil(scale * 20) / 20));
+}
+
 // Clicks re-render right away (several changes in the same tick still
 // coalesce into one render); typing passes a short delay so a burst of
 // keystrokes renders once. A timer rather than requestAnimationFrame, which
@@ -2335,8 +2377,15 @@ async function openModal() {
   const settings = loadSettings();
   status.textContent = "폰트 불러오는 중…";
   overlay.style.display = "flex";
-  await loadFonts();
+  // The preview doesn't wait on /api/fonts — the saved font is drawn right
+  // away and the dropdown fills in when the list arrives.
   populateFonts(settings.font);
+  void loadFonts().then((changed) => {
+    if (!changed || overlay.style.display !== "flex") return;
+    const before = fontSelect.value;
+    populateFonts(before);
+    if (fontSelect.value !== before) queueRender();
+  });
   setActiveSegment(ratioSegments, settings.ratio in RATIOS ? settings.ratio : "portrait");
   setActiveSegment(
     exportScaleSegments,
@@ -2453,10 +2502,6 @@ function updateSelectionButton() {
     hideSelectionButton();
     return;
   }
-  if (!range.toString().trim()) {
-    hideSelectionButton();
-    return;
-  }
   // Only the range is kept here — the (more expensive) styled text
   // extraction runs once, when the button is actually pressed.
   selectedRange = range.cloneRange();
@@ -2526,7 +2571,15 @@ marinaraCompat.on(document, "pointerdown", (event) => {
   if (!selectionButton.contains(event.target)) hideSelectionButton();
 });
 marinaraCompat.on(window, "scroll", repositionOnScroll, { capture: true, passive: true });
-marinaraCompat.on(window, "resize", repositionOnScroll, { passive: true });
+marinaraCompat.on(
+  window,
+  "resize",
+  () => {
+    repositionOnScroll();
+    if (overlay.style.display === "flex") queueRender(TYPING_RENDER_DELAY);
+  },
+  { passive: true },
+);
 
 marinaraCompat.on(selectionButton, "pointerdown", (event) => {
   openingFromPointer = true;
@@ -2628,37 +2681,49 @@ marinaraCompat.on(textColorField.input, "input", () => {
 });
 marinaraCompat.on(regexAddButton, "click", () => addRegexRule());
 
+// PNG encoding of a 2×/3× card can take seconds, so the button shows it's
+// busy and ignores repeat clicks until the file is out.
+let saving = false;
 marinaraCompat.on(saveButton, "click", async () => {
-  // The only place a render draws above 1× — the expensive full-resolution
-  // raster work happens once, right when 저장 is clicked.
+  if (saving) return;
+  saving = true;
+  saveButton.disabled = true;
+  // The full-resolution raster is drawn once, right when 저장 is clicked.
   const requestedScale = Number(activeSegmentValue(exportScaleSegments, "1")) || 1;
   const rendered = await renderCard({ scale: requestedScale });
   flushSettings();
-  if (!rendered) return;
-  // 1× exports the preview canvas itself; 2×/3× the offscreen render.
-  // toBlob() snapshots the pixels synchronously, so a later render can't
-  // affect this file.
-  rendered.toBlob((blob) => {
-    if (!blob) {
-      status.textContent = "이미지를 저장하지 못했습니다.";
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    const number = nextDownloadNumber();
-    anchor.href = url;
-    anchor.download = `marinara-${number}.png`;
-    anchor.style.display = "none";
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    pendingDownloadUrls.add(url);
-    marinara.setTimeout(() => {
-      URL.revokeObjectURL(url);
-      pendingDownloadUrls.delete(url);
-    }, 60_000);
-    status.textContent = "PNG를 저장했습니다.";
-  }, "image/png");
+  // Set after the render, which writes its own size line into status.
+  status.textContent = "PNG 만드는 중…";
+  const blob = rendered
+    ? await new Promise((resolve) => {
+        rendered.toBlob(resolve, "image/png");
+        // toBlob() snapshots the pixels synchronously, so the export raster
+        // (up to ~75MB at 3×) can be released right away.
+        rendered.width = 0;
+        rendered.height = 0;
+      })
+    : null;
+  saving = false;
+  saveButton.disabled = false;
+  if (!blob) {
+    status.textContent = "이미지를 저장하지 못했습니다.";
+    return;
+  }
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const number = nextDownloadNumber();
+  anchor.href = url;
+  anchor.download = `marinara-${number}.png`;
+  anchor.style.display = "none";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  pendingDownloadUrls.add(url);
+  marinara.setTimeout(() => {
+    URL.revokeObjectURL(url);
+    pendingDownloadUrls.delete(url);
+  }, 60_000);
+  status.textContent = "PNG를 저장했습니다.";
 });
 
 marinara.onCleanup(() => {
