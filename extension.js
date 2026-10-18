@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.5";
+const EXTENSION_VERSION = "2.5.6";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -2224,24 +2224,25 @@ async function renderCard(options = {}) {
   // size it's displayed at — a tall card shown a few hundred pixels wide no
   // longer gets a full 1080-wide raster (a 1080×7922 preview was ~34MB).
   const isExport = options.scale !== undefined;
-  const renderScale = isExport
-    ? EXPORT_SCALES.includes(options.scale)
-      ? options.scale
-      : 1
-    : previewPixelScale(ratioHeight);
+  const displayBox = isExport ? null : previewDisplayBox(ratioHeight);
+  const renderScale = isExport ? (EXPORT_SCALES.includes(options.scale) ? options.scale : 1) : displayBox?.scale ?? 1;
   // Nothing visible changed (e.g. the same segment clicked again) — keep
   // the current preview instead of repainting the whole card.
   const renderKey = `${layoutKey}\u0000${JSON.stringify(settings)}\u0000${selectedChatTitle}\u0000${ratioHeight}\u0000${renderScale}\u0000${JSON.stringify(cardHighlights)}\u0000${JSON.stringify(highlightDraft)}`;
   if (!isExport && renderKey === lastPreviewKey) return canvas;
   const target = isExport ? offscreenCanvas : canvas;
   const ctx = isExport ? offscreenCtx : previewCtx;
-  target.width = Math.round(ratioWidth * renderScale);
-  target.height = Math.round(ratioHeight * renderScale);
-  if (!isExport) lastPreviewKey = renderKey;
+  target.width = displayBox ? displayBox.pixelWidth : Math.round(ratioWidth * renderScale);
+  target.height = displayBox ? displayBox.pixelHeight : Math.round(ratioHeight * renderScale);
+  if (!isExport) {
+    lastPreviewKey = renderKey;
+    canvas.style.width = displayBox ? `${displayBox.cssWidth}px` : "";
+    canvas.style.height = displayBox ? `${displayBox.cssHeight}px` : "";
+  }
   // Resizing a canvas clears it and resets context state (including the
   // transform) to identity, so this is safe to set unconditionally right
   // after the resize above.
-  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+  ctx.setTransform(target.width / ratioWidth, 0, 0, target.height / ratioHeight, 0, 0);
 
   // Body text is centered only within the space ABOVE the reserved footer
   // zone, so the footer itself always stays pinned near the bottom.
@@ -2410,29 +2411,55 @@ async function renderCard(options = {}) {
   return target;
 }
 
-// Pixel scale for the preview canvas: its on-screen width (capped by the
-// pane and by its max-height for tall cards) times devicePixelRatio, rounded
-// up to 5% steps so small layout changes don't force a repaint. Never below
-// 0.3 so the preview stays legible, never above 1 (the file's own size).
-function previewPixelScale(ratioHeight) {
-  const paneWidth = previewPane.clientWidth;
-  const paneHeight = previewPane.clientHeight;
-  if (!paneWidth || !paneHeight) return 1;
-  const shownWidth = Math.min(500, paneWidth, (paneHeight * CARD_WIDTH) / ratioHeight);
-  const scale = (shownWidth * (window.devicePixelRatio || 1)) / CARD_WIDTH;
-  return Math.min(1, Math.max(0.3, Math.ceil(scale * 20) / 20));
+// The preview's on-screen box is decided here (not by CSS from the canvas's
+// own pixel size, which made it shrink to a low-resolution bitmap and get
+// stretched — the blurry text): the largest card that fits the pane (at most
+// 500px wide; on the compact layout at most min(32vh, 300px) tall). The
+// canvas then gets exactly that many *device* pixels, so text is drawn 1:1
+// with the screen instead of being scaled by the browser.
+const compactLayoutQuery = window.matchMedia("(max-width: 720px)");
+function previewDisplayBox(ratioHeight) {
+  const style = getComputedStyle(previewPane);
+  const innerWidth = previewPane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const innerHeight = previewPane.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  if (innerWidth <= 0) return null;
+  const maxWidth = Math.min(innerWidth, 500);
+  // The 형광펜 toolbar shares the pane's column with the card.
+  const toolbarSpace = highlightToolbar.offsetHeight + parseFloat(style.rowGap || "0");
+  const maxHeight = compactLayoutQuery.matches
+    ? Math.min(window.innerHeight * 0.32, 300)
+    : innerHeight - toolbarSpace;
+  if (maxHeight <= 0) return null;
+  const fit = Math.min(maxWidth / CARD_WIDTH, maxHeight / ratioHeight);
+  const dpr = window.devicePixelRatio || 1;
+  // Whole device pixels; the CSS size is derived back from them so the
+  // bitmap maps onto the screen exactly.
+  const pixelWidth = Math.max(1, Math.round(CARD_WIDTH * fit * dpr));
+  const scale = pixelWidth / CARD_WIDTH;
+  const pixelHeight = Math.max(1, Math.round(ratioHeight * scale));
+  return { scale, pixelWidth, pixelHeight, cssWidth: pixelWidth / dpr, cssHeight: pixelHeight / dpr };
 }
 
-// Clicks re-render right away (several changes in the same tick still
-// coalesce into one render); typing passes a short delay so a burst of
-// keystrokes renders once. A timer rather than requestAnimationFrame, which
-// stalls whenever the page is in the background.
+// Clicks and drags render on the next animation frame — at most one render
+// per frame however fast pointer events arrive (a timer could fire several
+// renders between two frames during a highlight drag). Frames can stall when
+// the page isn't being painted, so a backup timer renders anyway — whichever
+// fires first wins. Typing waits a short beat so a burst of keystrokes
+// renders once.
 let renderTimer = 0;
+let renderFrame = 0;
+function renderNow() {
+  window.clearTimeout(renderTimer);
+  cancelAnimationFrame(renderFrame);
+  void renderCard();
+}
 function queueRender(delay = 0) {
   window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => void renderCard(), delay);
+  cancelAnimationFrame(renderFrame);
+  if (!delay) renderFrame = requestAnimationFrame(renderNow);
+  renderTimer = window.setTimeout(renderNow, delay || 100);
 }
-const TYPING_RENDER_DELAY = 120;
+const TYPING_RENDER_DELAY = 50;
 const queueTypingRender = () => queueRender(TYPING_RENDER_DELAY);
 
 function closeModal() {
@@ -3005,6 +3032,7 @@ marinaraCompat.on(saveButton, "click", async () => {
 
 marinara.onCleanup(() => {
   window.clearTimeout(renderTimer);
+  cancelAnimationFrame(renderFrame);
   window.clearTimeout(selectionTimer);
   cancelAnimationFrame(repositionFrame);
   flushSettings();

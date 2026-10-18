@@ -71,7 +71,9 @@
 
 .mqc-preview {
   display: block;
-  width: min(100%, 500px);
+  /* width/height are set inline by renderCard (previewDisplayBox) so the
+     bitmap maps 1:1 onto device pixels; these caps are only a fallback. */
+  max-width: 100%;
   /* This used to be calc(100dvh - 3.3rem) — sized off the raw viewport
      height instead of the space actually available inside this pane. The
      dialog itself is capped at min(880px, calc(100dvh - 2rem)), so on any
@@ -826,8 +828,6 @@
      enough to actually read the card layout at a glance, still well short
      of dominating the screen the way the original did. */
   .mqc-preview {
-    width: auto;
-    height: auto;
     max-width: 100%;
     max-height: min(32vh, 300px);
   }
@@ -883,9 +883,12 @@
   user-select: none;
 }
 
-/* 형광펜 tools floating over the preview; dragging on the card paints. */
+/* 형광펜 tools in their own row above the preview (they used to float over
+   it and covered the first lines on small screens); dragging on the card
+   paints. */
 .mqc-preview-pane {
-  position: relative;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .mqc-preview {
@@ -894,19 +897,15 @@
 }
 
 .mqc-hl-toolbar {
-  position: absolute;
-  top: 0.6rem;
-  left: 50%;
-  z-index: 1;
   display: flex;
+  flex-shrink: 0;
+  max-width: 100%;
   align-items: center;
   gap: 0.35rem;
   padding: 0.25rem 0.35rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--background) 88%, transparent);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  transform: translateX(-50%);
-  backdrop-filter: blur(6px);
 }
 
 .mqc-hl-dot {
