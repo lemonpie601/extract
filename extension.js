@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.7";
+const EXTENSION_VERSION = "2.5.8";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -40,6 +40,16 @@ const FONT_SIZES = [28, 30, 32, 34, 36];
 // ctx.setTransform + the saveButton handler exporting from offscreenCanvas
 // instead of the small preview canvas).
 const EXPORT_SCALES = [1, 2, 3];
+// Saved file format. JPG has no transparency (the rounded corners are filled
+// with the card background); browsers that can't encode WEBP fall back to PNG.
+const EXPORT_FORMATS = [
+  { key: "png", label: "PNG", mime: "image/png" },
+  { key: "jpg", label: "JPG", mime: "image/jpeg" },
+  { key: "webp", label: "WEBP", mime: "image/webp" },
+];
+const EXPORT_QUALITY = 0.92;
+const formatByKey = (key) => EXPORT_FORMATS.find((format) => format.key === key) || EXPORT_FORMATS[0];
+const formatByMime = (mime) => EXPORT_FORMATS.find((format) => format.mime === mime) || EXPORT_FORMATS[0];
 // Only the site's font library is fetched over the network (backgrounds here
 // are the fixed BACKGROUND_PRESETS palette, not the gallery API 발췌 카드
 // uses) — same allowlist-then-fetch pattern as 발췌 카드's apiJson, kept even
@@ -256,6 +266,7 @@ const DEFAULTS = {
   // PNG export resolution multiplier (1×/2×/3×) — see EXPORT_SCALES. Doesn't
   // affect the on-screen preview, only the saved file's pixel dimensions.
   exportScale: 1,
+  exportFormat: "png",
   alignment: "left",
   backgroundColor: "#ffffff",
   backgroundPresetKey: "white",
@@ -715,6 +726,13 @@ EXPORT_SCALES.forEach((scale) => {
 });
 exportScaleField.append(exportScaleSegments);
 
+const exportFormatField = makeField("저장 형식");
+const exportFormatSegments = el("div", "mqc-segments");
+EXPORT_FORMATS.forEach(({ key, label }) => exportFormatSegments.append(makeSegment(key, `${label}로 저장`, label)));
+exportFormatField.append(exportFormatSegments);
+const exportPair = el("div", "mqc-compact-pair");
+exportPair.append(exportScaleField, exportFormatField);
+
 const alignmentFontPair = el("div", "mqc-compact-pair");
 alignmentFontPair.append(alignmentField, fontField);
 
@@ -943,7 +961,7 @@ const ratioFooterPair = el("div", "mqc-compact-pair");
 ratioFooterPair.append(ratioField, footerLabelField);
 tabPanels.get("text").append(textField, alignmentFontPair, styleRow, chatControlsPair);
 tabPanels.get("design").append(cardStyleField, backgroundField, ratioFooterPair);
-tabPanels.get("advanced").append(exportScaleField, regexBox);
+tabPanels.get("advanced").append(exportPair, regexBox);
 
 let activeTab = "text";
 function showTab(key) {
@@ -1142,6 +1160,7 @@ function settingsFromControls() {
     ratio: activeSegmentValue(ratioSegments, "portrait"),
     font: fontSelect.value,
     exportScale: Number(activeSegmentValue(exportScaleSegments, "1")) || 1,
+    exportFormat: activeSegmentValue(exportFormatSegments, "png"),
     fontSizeLevel,
     alignment: activeSegmentValue(alignmentSegments, "left"),
     backgroundColor: activeSegmentValue(backgroundPresetGrid, DEFAULTS.backgroundColor),
@@ -2531,6 +2550,8 @@ async function openModal() {
     exportScaleSegments,
     EXPORT_SCALES.includes(Number(settings.exportScale)) ? String(settings.exportScale) : "1",
   );
+  setActiveSegment(exportFormatSegments, formatByKey(settings.exportFormat).key);
+  syncSaveButtonLabel();
   setActiveSegment(
     alignmentSegments,
     ["left", "center", "justify", "right"].includes(settings.alignment) ? settings.alignment : "left",
@@ -2977,6 +2998,17 @@ function wireSegmentClicks(container) {
   exportScaleSegments,
   cardStyleGrid,
 ].forEach(wireSegmentClicks);
+// The format only matters at save time — no re-render, just the button label.
+function syncSaveButtonLabel() {
+  saveButton.textContent = `${formatByKey(activeSegmentValue(exportFormatSegments, "png")).label} 저장`;
+}
+marinaraCompat.on(exportFormatSegments, "click", (event) => {
+  const button = event.target.closest(".mqc-segment[data-value]");
+  if (!button) return;
+  setActiveSegment(exportFormatSegments, button.dataset.value);
+  syncSaveButtonLabel();
+  saveSettings(settingsFromControls());
+});
 marinaraCompat.on(tabBar, "click", (event) => {
   const tab = event.target.closest(".mqc-tab[data-tab]");
   if (!tab) return;
@@ -3022,7 +3054,7 @@ marinaraCompat.on(textColorField.input, "input", () => {
 });
 marinaraCompat.on(regexAddButton, "click", () => addRegexRule());
 
-// PNG encoding of a 2×/3× card can take seconds, so the button shows it's
+// Encoding a 2×/3× card can take seconds, so the button shows it's
 // busy and ignores repeat clicks until the file is out.
 let saving = false;
 marinaraCompat.on(saveButton, "click", async () => {
@@ -3031,13 +3063,25 @@ marinaraCompat.on(saveButton, "click", async () => {
   saveButton.disabled = true;
   // The full-resolution raster is drawn once, right when 저장 is clicked.
   const requestedScale = Number(activeSegmentValue(exportScaleSegments, "1")) || 1;
+  const format = formatByKey(activeSegmentValue(exportFormatSegments, "png"));
   const rendered = await renderCard({ scale: requestedScale });
   flushSettings();
   // Set after the render, which writes its own size line into status.
-  status.textContent = "PNG 만드는 중…";
+  status.textContent = `${format.label} 만드는 중…`;
+  if (rendered && format.key === "jpg") {
+    // JPG can't store transparency: fill the see-through corners behind the
+    // card with its own background color instead of letting them turn black.
+    const exportCtx = rendered.getContext("2d");
+    exportCtx.save();
+    exportCtx.setTransform(1, 0, 0, 1, 0, 0);
+    exportCtx.globalCompositeOperation = "destination-over";
+    exportCtx.fillStyle = activeSegmentValue(backgroundPresetGrid, DEFAULTS.backgroundColor);
+    exportCtx.fillRect(0, 0, rendered.width, rendered.height);
+    exportCtx.restore();
+  }
   const blob = rendered
     ? await new Promise((resolve) => {
-        rendered.toBlob(resolve, "image/png");
+        rendered.toBlob(resolve, format.mime, EXPORT_QUALITY);
         // toBlob() snapshots the pixels synchronously, so the export raster
         // (up to ~75MB at 3×) can be released right away.
         rendered.width = 0;
@@ -3055,7 +3099,10 @@ marinaraCompat.on(saveButton, "click", async () => {
   const baseName = downloadBaseName(settingsFromControls());
   const number = nextDownloadNumber(baseName);
   anchor.href = url;
-  anchor.download = `${baseName}-${number}.png`;
+  // The extension follows what the browser actually produced (a browser
+  // without WEBP encoding hands back a PNG).
+  const savedFormat = formatByMime(blob.type);
+  anchor.download = `${baseName}-${number}.${savedFormat.key}`;
   anchor.style.display = "none";
   document.body.append(anchor);
   anchor.click();
@@ -3065,7 +3112,10 @@ marinaraCompat.on(saveButton, "click", async () => {
     URL.revokeObjectURL(url);
     pendingDownloadUrls.delete(url);
   }, 60_000);
-  status.textContent = `${anchor.download} 저장했습니다.`;
+  status.textContent =
+    savedFormat.key === format.key
+      ? `${anchor.download} 저장했습니다.`
+      : `이 브라우저는 ${format.label} 저장을 지원하지 않아 ${anchor.download}로 저장했습니다.`;
 });
 
 marinara.onCleanup(() => {
