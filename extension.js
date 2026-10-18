@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.6";
+const EXTENSION_VERSION = "2.5.7";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -400,13 +400,50 @@ function saveSettings(settings) {
   saveSettingsTimer = window.setTimeout(flushSettings, 600);
 }
 
-// Saved PNG filenames are "marinara-1.png", "marinara-2.png", ... instead of
-// a timestamp — a simple running counter persisted in this browser.
-function nextDownloadNumber() {
-  const current = Number(localStorage.getItem(DOWNLOAD_COUNTER_KEY)) || 0;
-  const next = current + 1;
-  localStorage.setItem(DOWNLOAD_COUNTER_KEY, String(next));
+// Saved PNG filenames follow the 하단 라벨: "<캐릭터 이름>-1.png",
+// "marinara-1.png" or "<직접입력>-1.png", each name with its own running
+// counter persisted in this browser. The "marinara" counter continues from
+// the single counter older versions kept under DOWNLOAD_COUNTER_KEY.
+const DOWNLOAD_COUNTERS_KEY = "marinara-quote-card-download-counters-v2";
+
+function nextDownloadNumber(baseName) {
+  let counters = {};
+  try {
+    counters = JSON.parse(localStorage.getItem(DOWNLOAD_COUNTERS_KEY) || "{}") || {};
+  } catch {
+    counters = {};
+  }
+  if (counters[baseName] === undefined && baseName === "marinara") {
+    counters[baseName] = Number(localStorage.getItem(DOWNLOAD_COUNTER_KEY)) || 0;
+  }
+  const next = (Number(counters[baseName]) || 0) + 1;
+  counters[baseName] = next;
+  try {
+    localStorage.setItem(DOWNLOAD_COUNTERS_KEY, JSON.stringify(counters));
+  } catch {
+    // Storage blocked — the name still works, the number just won't persist.
+  }
   return next;
+}
+
+// Characters Windows/macOS/Android refuse in filenames, plus control chars.
+const UNSAFE_FILENAME_CHARS_RE = /[\\/:*?"<>|\u0000-\u001f]/g;
+function safeFileBaseName(name) {
+  const cleaned = String(name || "")
+    .replace(UNSAFE_FILENAME_CHARS_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+|\.+$/g, "")
+    .slice(0, 60)
+    .trim();
+  return cleaned || "marinara";
+}
+
+// Same choice the card's footer line makes (see renderCard).
+function downloadBaseName(settings) {
+  if (settings.footerLabel === "marinara") return "marinara";
+  const customText = settings.footerLabel === "custom" ? settings.footerLabelCustomText?.trim() : "";
+  return safeFileBaseName(customText || selectedChatTitle);
 }
 
 function selectionIsInChat(selection) {
@@ -3015,9 +3052,10 @@ marinaraCompat.on(saveButton, "click", async () => {
   }
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
-  const number = nextDownloadNumber();
+  const baseName = downloadBaseName(settingsFromControls());
+  const number = nextDownloadNumber(baseName);
   anchor.href = url;
-  anchor.download = `marinara-${number}.png`;
+  anchor.download = `${baseName}-${number}.png`;
   anchor.style.display = "none";
   document.body.append(anchor);
   anchor.click();
@@ -3027,7 +3065,7 @@ marinaraCompat.on(saveButton, "click", async () => {
     URL.revokeObjectURL(url);
     pendingDownloadUrls.delete(url);
   }, 60_000);
-  status.textContent = "PNG를 저장했습니다.";
+  status.textContent = `${anchor.download} 저장했습니다.`;
 });
 
 marinara.onCleanup(() => {
