@@ -1,6 +1,6 @@
 // Targets Marinara Engine v2.5.0 (selection "로어북에 추가" button, active chat
 // id in localStorage, /api/chats/:id for the title).
-const EXTENSION_VERSION = "2.5.4";
+const EXTENSION_VERSION = "2.5.5";
 const STORAGE_KEY = "marinara-quote-card-settings-v1";
 const DOWNLOAD_COUNTER_KEY = "marinara-quote-card-download-counter-v1";
 const ACTIVE_CHAT_ID_KEY = "marinara-active-chat-id";
@@ -608,7 +608,11 @@ const canvas = el("canvas", "mqc-preview");
 canvas.width = CARD_WIDTH;
 canvas.height = RATIOS.portrait.height;
 const previewCtx = canvas.getContext("2d");
-previewPane.append(canvas);
+// 형광펜 tools over the preview: colors, eraser, clear (see the highlighter section).
+const highlightToolbar = el("div", "mqc-hl-toolbar");
+highlightToolbar.setAttribute("role", "toolbar");
+highlightToolbar.setAttribute("aria-label", "형광펜");
+previewPane.append(highlightToolbar, canvas);
 
 const controls = el("div", "mqc-controls");
 const header = el("div", "mqc-header");
@@ -1330,7 +1334,7 @@ function detectChatLog(text) {
   return sawTimestamp ? parsed : null;
 }
 
-function styledCharacters(text) {
+function styledCharacters(text, indexBase = 0) {
   const openers = new Map([
     ["“", "”"],
     ["「", "」"],
@@ -1375,7 +1379,9 @@ function styledCharacters(text) {
       dialogue = true;
       if (char === expectedCloser) expectedCloser = "";
     }
-    result.push({ char, dialogue, emphasis, bold });
+    // index: position in the card's plain text (markers stripped) — what
+    // preview highlights are anchored to (see cardHighlights).
+    result.push({ char, dialogue, emphasis, bold, index: indexBase + result.length });
   }
   return result;
 }
@@ -1409,7 +1415,7 @@ function measureChar(ctx, char) {
   return width;
 }
 
-function layoutStyledLines(ctx, text, maxWidth, fontSize, family) {
+function layoutStyledLines(ctx, text, maxWidth, fontSize, family, indexBase = 0) {
   // Font now varies with each run's `bold` flag (600 vs 400 weight), so
   // ctx.font can't be set just once for the whole pass anymore — but it's
   // still only reassigned when the bold state actually flips between runs,
@@ -1429,7 +1435,7 @@ function layoutStyledLines(ctx, text, maxWidth, fontSize, family) {
     width = 0;
   };
 
-  const characters = styledCharacters(text);
+  const characters = styledCharacters(text, indexBase);
   const tokens = [];
   let token = [];
   let tokenKind = "";
@@ -1512,6 +1518,7 @@ function drawStyledLine(
   emphasisNarrationColor,
   boldDialogueColor,
   boldNarrationColor,
+  paint,
 ) {
   const alignment = settings.alignment;
   // Font now varies with each run's `bold` flag — set below as each run is
@@ -1537,6 +1544,16 @@ function drawStyledLine(
       cursor += extraSpacing;
     }
   });
+
+  if (paint.highlightAt.length) drawLineHighlights(ctx, line.runs, xs, y, fontSize, paint.highlightAt);
+  // Preview only: where each character landed, for drag-to-highlight.
+  if (paint.hitBoxes) {
+    const top = y - fontSize * 0.95;
+    const bottom = y + fontSize * 0.35;
+    line.runs.forEach((item, index) => {
+      paint.hitBoxes.push({ index: item.index, left: xs[index], right: xs[index] + item.width, top, bottom });
+    });
+  }
 
   // Pass 2: glyphs, batched into one fillText per run of identical styling
   // instead of one call per character. A batch is cut wherever justify
@@ -1578,6 +1595,43 @@ function drawStyledLine(
   flush();
 }
 
+// Highlighter band behind a line's glyphs: consecutive characters with the
+// same color merge into one slightly slanted stroke over the lower ~60% of
+// the text, like a real marker. Trailing spaces aren't painted.
+function drawLineHighlights(ctx, runs, xs, baselineY, fontSize, highlightAt) {
+  let segment = null;
+  const strokeSegment = () => {
+    if (!segment) return;
+    let last = segment.last;
+    while (last > segment.first && runs[last].char === " ") last--;
+    const pad = fontSize * 0.1;
+    const left = xs[segment.first] - pad;
+    const width = xs[last] + runs[last].width - xs[segment.first] + pad * 2;
+    const top = baselineY - fontSize * 0.55;
+    const height = fontSize * 0.68;
+    const skew = fontSize * 0.08;
+    ctx.fillStyle = hexToRgba(segment.color, HIGHLIGHT_ALPHA);
+    ctx.beginPath();
+    ctx.moveTo(left + skew, top);
+    ctx.lineTo(left + width, top + skew * 0.4);
+    ctx.lineTo(left + width - skew, top + height);
+    ctx.lineTo(left, top + height - skew * 0.4);
+    ctx.closePath();
+    ctx.fill();
+    segment = null;
+  };
+  runs.forEach((item, index) => {
+    const color = highlightAt[item.index];
+    if (segment && color === segment.color && index === segment.last + 1) {
+      segment.last = index;
+      return;
+    }
+    strokeSegment();
+    if (color) segment = { color, first: index, last: index };
+  });
+  strokeSegment();
+}
+
 function truncateLineAtWord(line) {
   while (line.runs.length && line.runs[line.runs.length - 1].char === " ") {
     line.width -= line.runs.pop().width;
@@ -1600,12 +1654,16 @@ function speakerFontString(fontSize, family) {
 function layoutChatRows(ctx, blocks, maxWidth, fontSize, family) {
   const nameFontSize = speakerFontSize(fontSize);
   const rows = [];
+  // Messages are indexed as if joined by one separator character — the same
+  // string plainTextFor() builds — so highlight indices stay unique.
+  let indexBase = 0;
   blocks.forEach((block, index) => {
     if (index > 0) rows.push({ kind: "gap" });
     ctx.font = speakerFontString(nameFontSize, family);
     rows.push({ kind: "speaker", text: block.speaker, width: ctx.measureText(block.speaker).width });
-    const messageLines = layoutStyledLines(ctx, block.message, maxWidth, fontSize, family);
+    const messageLines = layoutStyledLines(ctx, block.message, maxWidth, fontSize, family, indexBase);
     messageLines.forEach((line) => rows.push({ ...line, kind: "message" }));
+    indexBase += plainLength(block.message) + 1;
   });
   return rows;
 }
@@ -2084,6 +2142,15 @@ async function renderCard(options = {}) {
   }
   let rows = layoutCache.rows;
 
+  // Highlights are character ranges over the card's plain text; when the
+  // text changes they're shifted to follow the edit (see remapHighlights).
+  const plainText = isBubbleMode ? "" : plainTextFor(processedText, chatBlocks);
+  if (plainText !== highlightPlainText) {
+    cardHighlights = remapHighlights(cardHighlights, highlightPlainText, plainText);
+    highlightPlainText = plainText;
+  }
+  const highlightAt = buildHighlightLookup(plainText);
+
   let ratioHeight;
   let topMargin;
   let bottomMargin;
@@ -2164,7 +2231,7 @@ async function renderCard(options = {}) {
     : previewPixelScale(ratioHeight);
   // Nothing visible changed (e.g. the same segment clicked again) — keep
   // the current preview instead of repainting the whole card.
-  const renderKey = `${layoutKey}\u0000${JSON.stringify(settings)}\u0000${selectedChatTitle}\u0000${ratioHeight}\u0000${renderScale}`;
+  const renderKey = `${layoutKey}\u0000${JSON.stringify(settings)}\u0000${selectedChatTitle}\u0000${ratioHeight}\u0000${renderScale}\u0000${JSON.stringify(cardHighlights)}\u0000${JSON.stringify(highlightDraft)}`;
   if (!isExport && renderKey === lastPreviewKey) return canvas;
   const target = isExport ? offscreenCanvas : canvas;
   const ctx = isExport ? offscreenCtx : previewCtx;
@@ -2242,6 +2309,7 @@ async function renderCard(options = {}) {
     own: { bubble: isDarkCard ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.05)", text: narrationTextColor },
     other: { bubble: settings.dialogueColor, text: resolveOwnBubbleTextColor(settings.dialogueColor) },
   };
+  const paint = { highlightAt, hitBoxes: isExport ? null : [] };
   rows.forEach((row) => {
     if (row.kind === "gap" || row.kind === "bubbleGap") {
       y += row.height ?? gapHeight;
@@ -2278,6 +2346,7 @@ async function renderCard(options = {}) {
       emphasisNarrationColor,
       boldDialogueColor,
       boldNarrationColor,
+      paint,
     );
     y += lineHeight;
   });
@@ -2322,6 +2391,10 @@ async function renderCard(options = {}) {
     ctx.fillText(customText || selectedChatTitle || "캐릭터", sideMargin, labelBaseline);
   }
 
+  if (!isExport) {
+    previewHitBoxes = paint.hitBoxes;
+    previewLogicalSize = { width: ratioWidth, height: ratioHeight };
+  }
   const chatStatusSuffix = chatBlocks ? (isBubbleMode ? " · 대화 로그 (말풍선)" : " · 대화 로그 (대화록)") : "";
   // Informational only — reflects the person's SAVED 저장 배율 preference
   // (settings.exportScale), not renderScale (which this particular pass
@@ -2374,6 +2447,9 @@ async function openModal() {
   selectedChatTitle = resolveChatTitle();
   selectionButton.style.display = "none";
   textArea.value = selectedText;
+  cardHighlights = [];
+  highlightDraft = null;
+  highlightPlainText = "";
   const settings = loadSettings();
   status.textContent = "폰트 불러오는 중…";
   overlay.style.display = "flex";
@@ -2448,6 +2524,207 @@ async function openModal() {
   if (!storedRules.length) addRegexRule();
   await renderCard();
 }
+
+// --- 형광펜 (drag on the preview) -------------------------------------------------
+// Highlights live only in the open dialog: character ranges over the card's
+// plain text (the laid-out characters, "*" markers stripped), drawn behind
+// the glyphs in both the preview and the saved PNG. Dragging across the
+// preview paints (or erases) the characters under the pointer.
+
+const HIGHLIGHT_COLORS = ["#ffd54a", "#ff8fab", "#8ee6c8", "#9cc9ff"];
+const HIGHLIGHT_ALPHA = 0.5;
+const ERASER = "erase";
+let cardHighlights = []; // [{ start, end, color }] — end exclusive, sorted
+let highlightDraft = null; // { start, end } while a drag is in progress
+let highlightTool = HIGHLIGHT_COLORS[0];
+let highlightPlainText = "";
+let previewHitBoxes = [];
+let previewLogicalSize = { width: CARD_WIDTH, height: RATIOS.portrait.height };
+
+// Characters as styledCharacters() counts them: code points, "*" removed.
+function plainLength(text) {
+  let n = 0;
+  for (const char of text) if (char !== "*") n++;
+  return n;
+}
+
+function plainTextFor(processedText, chatBlocks) {
+  const strip = (text) => text.replace(/\*/g, "");
+  return chatBlocks ? chatBlocks.map((block) => strip(block.message)).join("\u0000") : strip(processedText);
+}
+
+// Shifts ranges to follow a text edit: everything before the first changed
+// character stays, everything after the last one moves by the length
+// difference, and the edited stretch itself drops out of any highlight.
+function remapHighlights(ranges, oldText, newText) {
+  if (!ranges.length || !oldText) return [];
+  const a = Array.from(oldText);
+  const b = Array.from(newText);
+  let prefix = 0;
+  while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < a.length - prefix &&
+    suffix < b.length - prefix &&
+    a[a.length - 1 - suffix] === b[b.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  const oldEditEnd = a.length - suffix;
+  const delta = b.length - a.length;
+  const result = [];
+  for (const range of ranges) {
+    if (range.start < prefix) result.push({ ...range, end: Math.min(range.end, prefix) });
+    if (range.end > oldEditEnd) {
+      result.push({ ...range, start: Math.max(range.start, oldEditEnd) + delta, end: range.end + delta });
+    }
+  }
+  return result.filter((range) => range.end > range.start);
+}
+
+// Removes [start, end) from every range (splitting where needed).
+function subtractRange(ranges, start, end) {
+  const result = [];
+  for (const range of ranges) {
+    if (range.end <= start || range.start >= end) {
+      result.push(range);
+      continue;
+    }
+    if (range.start < start) result.push({ ...range, end: start });
+    if (range.end > end) result.push({ ...range, start: end });
+  }
+  return result;
+}
+
+function applyHighlightRange(start, end) {
+  const kept = subtractRange(cardHighlights, start, end);
+  if (highlightTool !== ERASER) kept.push({ start, end, color: highlightTool });
+  cardHighlights = kept.sort((x, y) => x.start - y.start);
+}
+
+// Per-character color array for this render (the in-progress drag shown on top).
+function buildHighlightLookup(plainText) {
+  if (!plainText || (!cardHighlights.length && !highlightDraft)) return [];
+  const lookup = new Array(plainLength(plainText));
+  for (const range of cardHighlights) lookup.fill(range.color, range.start, range.end);
+  if (highlightDraft) {
+    lookup.fill(highlightTool === ERASER ? undefined : highlightTool, highlightDraft.start, highlightDraft.end);
+  }
+  return lookup;
+}
+
+// Pointer → card coordinates. The canvas is letterboxed with
+// object-fit: contain, so the drawn card can be smaller than the element.
+function previewPointToCard(event) {
+  const rect = canvas.getBoundingClientRect();
+  const { width, height } = previewLogicalSize;
+  const scale = Math.min(rect.width / width, rect.height / height);
+  if (!scale) return null;
+  return {
+    x: (event.clientX - rect.left - (rect.width - width * scale) / 2) / scale,
+    y: (event.clientY - rect.top - (rect.height - height * scale) / 2) / scale,
+  };
+}
+
+// The character under (or nearest to) a card point — vertical distance
+// counts more, so a drag snaps to the line the pointer is on.
+function characterIndexAt(point) {
+  let best = null;
+  let bestScore = Infinity;
+  for (const box of previewHitBoxes) {
+    const dx = point.x < box.left ? box.left - point.x : point.x > box.right ? point.x - box.right : 0;
+    const dy = point.y < box.top ? box.top - point.y : point.y > box.bottom ? point.y - box.bottom : 0;
+    const score = dy * 4 + dx;
+    if (score < bestScore) {
+      bestScore = score;
+      best = box;
+      if (score === 0) break;
+    }
+  }
+  return best ? best.index : null;
+}
+
+let highlightDrag = null;
+function updateHighlightDraft(event) {
+  const point = previewPointToCard(event);
+  const index = point && characterIndexAt(point);
+  if (index === null || index === undefined) return;
+  const start = Math.min(highlightDrag.anchor, index);
+  const end = Math.max(highlightDrag.anchor, index) + 1;
+  if (highlightDraft && highlightDraft.start === start && highlightDraft.end === end) return;
+  highlightDraft = { start, end };
+  queueRender();
+}
+
+marinaraCompat.on(canvas, "pointerdown", (event) => {
+  if (event.button !== 0 || !previewHitBoxes.length) return;
+  const point = previewPointToCard(event);
+  const anchor = point && characterIndexAt(point);
+  if (anchor === null || anchor === undefined) return;
+  event.preventDefault();
+  try {
+    // Keeps the drag going when the pointer leaves the canvas.
+    canvas.setPointerCapture(event.pointerId);
+  } catch {
+    // Not an active pointer (e.g. a synthetic event) — the drag still works
+    // while the pointer stays over the preview.
+  }
+  highlightDrag = { anchor, pointerId: event.pointerId };
+  updateHighlightDraft(event);
+});
+marinaraCompat.on(canvas, "pointermove", (event) => {
+  if (highlightDrag && event.pointerId === highlightDrag.pointerId) updateHighlightDraft(event);
+});
+const finishHighlightDrag = (event) => {
+  if (!highlightDrag || event.pointerId !== highlightDrag.pointerId) return;
+  highlightDrag = null;
+  if (highlightDraft) applyHighlightRange(highlightDraft.start, highlightDraft.end);
+  highlightDraft = null;
+  syncHighlightToolbar();
+  queueRender();
+};
+marinaraCompat.on(canvas, "pointerup", finishHighlightDrag);
+marinaraCompat.on(canvas, "pointercancel", finishHighlightDrag);
+
+// Toolbar: color dots, eraser, clear-all.
+HIGHLIGHT_COLORS.forEach((color) => {
+  const dot = el("button", "mqc-hl-dot");
+  dot.type = "button";
+  dot.dataset.tool = color;
+  dot.style.backgroundColor = color;
+  dot.title = "형광펜 — 미리보기에서 드래그해서 칠하기";
+  dot.setAttribute("aria-label", `형광펜 ${color}`);
+  highlightToolbar.append(dot);
+});
+const eraserButton = el("button", "mqc-hl-tool", "지우개");
+eraserButton.type = "button";
+eraserButton.dataset.tool = ERASER;
+eraserButton.title = "드래그한 부분의 형광펜 지우기";
+const clearHighlightsButton = el("button", "mqc-hl-tool", "모두 지우기");
+clearHighlightsButton.type = "button";
+highlightToolbar.append(eraserButton, clearHighlightsButton);
+
+function syncHighlightToolbar() {
+  highlightToolbar.querySelectorAll("[data-tool]").forEach((button) => {
+    button.dataset.active = String(button.dataset.tool === highlightTool);
+  });
+  clearHighlightsButton.disabled = !cardHighlights.length;
+}
+syncHighlightToolbar();
+
+marinaraCompat.on(highlightToolbar, "click", (event) => {
+  const tool = event.target.closest("[data-tool]");
+  if (tool) {
+    highlightTool = tool.dataset.tool;
+    syncHighlightToolbar();
+    return;
+  }
+  if (event.target.closest(".mqc-hl-tool") === clearHighlightsButton && cardHighlights.length) {
+    cardHighlights = [];
+    syncHighlightToolbar();
+    queueRender();
+  }
+});
 
 // --- Selection button -----------------------------------------------------------
 
